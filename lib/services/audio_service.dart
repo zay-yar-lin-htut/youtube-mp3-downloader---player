@@ -78,6 +78,16 @@ class AudioService implements AudioEngine {
       );
     }
 
+    // Device-collection tracks are addressed by a MediaStore content URI
+    // (scoped storage). Play them through an audio source URI.
+    if (scheme == 'content') {
+      debugPrint('[AudioService] playing content URI: $filePath');
+      _stage.value = EngineStage.loading;
+      await _player.setAudioSource(AudioSource.uri(uri!));
+      await _player.play();
+      return;
+    }
+
     if (!File(filePath).isAbsolute) {
       throw const AudioEngineException(
         'localPath is not an absolute filesystem path',

@@ -1,10 +1,41 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 import 'download_manager.dart';
 import '../models/song.dart';
+
+/// Thrown when YouTube throttles requests (HTTP 429 or the /sorry/ bot-check
+/// page), surfaced by the library as `RequestLimitExceededException` during
+/// the manifest/player phase. The UI shows a "try again shortly" message -
+/// distinctly NOT a video-unavailable claim.
+class DownloadRateLimitedException implements Exception {
+  const DownloadRateLimitedException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// Thrown when the video is genuinely unavailable, as opposed to rate-limited.
+class DownloadUnavailableException implements Exception {
+  const DownloadUnavailableException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+/// Result of one manifest+media pass over the candidate clients.
+typedef DownloadAttempt = ({
+  String? path,
+  bool rateLimited,
+  Object? lastError,
+});
 
 class YouTubeService {
   final YoutubeExplode _yt = YoutubeExplode();
@@ -79,19 +110,51 @@ class YouTubeService {
     return e.runtimeType.toString();
   }
 
-  Future<List<Song>> searchVideos(String query) async {
-    final searchResult = await _yt.search.search(query);
-    return searchResult.map((video) {
-      return Song(
-        id: video.id.value,
-        title: video.title,
-        author: video.author,
-        duration: video.duration != null
-            ? _formatDuration(video.duration!)
-            : '0:00',
-        thumbnailUrl: video.thumbnails.highResUrl,
-      );
-    }).toList();
+  Future<VideoSearchPage> searchVideos(String query) async {
+    final list = await _yt.search.search(query);
+    return VideoSearchPage._(
+      list.whereType<Video>().map(_toSong).toList(),
+      list,
+    );
+  }
+
+  /// Fetches the next batch (≈20 items) for [page], or null when exhausted.
+  Future<VideoSearchPage?> nextSearchPage(VideoSearchPage page) async {
+    final continuation = page._continuation;
+    if (continuation == null) {
+      return null;
+    }
+    final next = await continuation.nextPage();
+    if (next == null) {
+      return null;
+    }
+    return VideoSearchPage._(
+      next.whereType<Video>().map(_toSong).toList(),
+      next,
+    );
+  }
+
+  /// Resolves a single video by id (used for URL-based search).
+  Future<Song> getVideo(String videoId) async {
+    final video = await _yt.videos.get(videoId);
+    return _toSong(video);
+  }
+
+  /// Live YouTube search suggestions for [query] (isolated from UI widgets).
+  Future<List<String>> getSearchSuggestions(String query) =>
+      _yt.search.getQuerySuggestions(query);
+
+  Song _toSong(Video video) {
+    return Song(
+      id: video.id.value,
+      title: video.title,
+      author: video.author,
+      duration: video.duration != null
+          ? _formatDuration(video.duration!)
+          : '0:00',
+      thumbnailUrl: video.thumbnails.highResUrl,
+      youtubeUrl: video.url,
+    );
   }
 
   AudioOnlyStreamInfo _bestAudioStream(AudioOnlyStreamInfo a,
@@ -137,10 +200,44 @@ class YouTubeService {
     return selectBestAudioStream(audioStreams).url.toString();
   }
 
+  // A manifest-phase rate limit (YouTube throttling this IP) applies to ALL
+  // clients, so the candidate loop must stop immediately instead of hammering
+  // the remaining 5. Bounded backoff allows exactly one short jittered retry
+  // pass; nothing here loops without bound or blocks the UI.
+  static const int _rateLimitMaxPasses = 2;
+
   Future<String> downloadAudio(Song song) async {
     debugPrint('[Download] START id=${song.id} title=${song.title}');
-    Object? lastError;
     final appDir = await getApplicationDocumentsDirectory();
+
+    for (var pass = 1; pass <= _rateLimitMaxPasses; pass++) {
+      if (pass > 1) {
+        final delay = _rateLimitBackoff(pass);
+        debugPrint('[Download] RATE_LIMIT backoff pass=$pass '
+            'waiting=${delay.inMilliseconds}ms');
+        await Future.delayed(delay);
+      }
+
+      final attempt = await _attemptDownload(song, appDir.path);
+      if (attempt.path != null) {
+        return attempt.path!;
+      }
+      if (!attempt.rateLimited) {
+        throw _classifyDownloadFailure(attempt.lastError);
+      }
+      debugPrint('[Download] RATE_LIMIT pass=$pass failed');
+    }
+
+    throw const DownloadRateLimitedException(
+        'Download temporarily limited by YouTube. Please try again shortly.');
+  }
+
+  /// One pass over the manifest clients. Video ID, client, exception type and
+  /// (for media-phase) byte counts are logged - never cookies, authorization
+  /// headers, or signed media URLs. Returns rate-limited as soon as the
+  /// manifest phase is throttled, without probing the remaining clients.
+  Future<DownloadAttempt> _attemptDownload(Song song, String appDirPath) async {
+    Object? lastError;
 
     for (final client in _manifestClients) {
       final name = _clientName(client);
@@ -150,6 +247,10 @@ class YouTubeService {
       late final StreamManifest manifest;
       try {
         manifest = await _getManifestFor(song.id, client);
+      } on RequestLimitExceededException catch (e) {
+        debugPrint('[Download] RATE_LIMIT (manifest, client=$name) '
+            '${_describeException(e)}');
+        return (path: null, rateLimited: true, lastError: e);
       } catch (e, st) {
         debugPrint('[Download] Manifest FAILED (client=$name) '
             '${_describeException(e)}');
@@ -169,7 +270,7 @@ class YouTubeService {
 
       final audioInfo = selectBestAudioStream(audioStreams);
       final ext = _extForAudio(audioInfo);
-      final filePath = '${appDir.path}/${song.id}.$ext';
+      final filePath = '$appDirPath/${song.id}.$ext';
       final codecs = audioInfo.codec.parameters['codecs'] ?? '';
       debugPrint('[Download] Stream selected tag=${audioInfo.tag} '
           'container=${audioInfo.container.name} '
@@ -179,7 +280,8 @@ class YouTubeService {
           'url=${_urlPreview(audioInfo.url)} target=$filePath');
 
       try {
-        return await _downloadFrom(audioInfo, song, filePath);
+        final path = await _downloadFrom(audioInfo, song, filePath);
+        return (path: path, rateLimited: false, lastError: null);
       } catch (e, st) {
         debugPrint('[Download] Client candidate=$name FAILED: '
             '${_describeException(e)}');
@@ -189,10 +291,25 @@ class YouTubeService {
       }
     }
 
+    return (path: null, rateLimited: false, lastError: lastError);
+  }
+
+  /// Maps a fully-failed pass to the right error: rate-limited, unavailable,
+  /// or the generic downloader failure.
+  Object _classifyDownloadFailure(Object? lastError) {
+    if (lastError is VideoUnavailableException) {
+      return const DownloadUnavailableException(
+          'This video is unavailable. Try a different result.');
+    }
     debugPrint('[Download] ALL_CLIENTS_FAILED');
-    throw StateError(
+    return StateError(
         'All download candidates failed before producing bytes. '
         'Last: ${_describeException(lastError ?? StateError('unknown'))}');
+  }
+
+  Duration _rateLimitBackoff(int pass) {
+    final jitter = math.Random().nextInt(600);
+    return Duration(milliseconds: 1500 * (1 << (pass - 1)) + jitter);
   }
 
   // Transport: our own dart:io HttpClient CHUNKED ranged GET. This REPLACES
@@ -444,4 +561,21 @@ class YouTubeService {
   void dispose() {
     _yt.close();
   }
+}
+
+/// One page of search results plus a continuation to load further pages.
+///
+/// Consumed by the search UI; null is returned by [nextSearchPage] once
+/// YouTube stops producing more results.
+class VideoSearchPage {
+  /// Creates a standalone page with no continuation (exhausted search). This
+  /// is the public/test constructor; streaming callers use the private one.
+  VideoSearchPage(this.songs) : _continuation = null;
+
+  VideoSearchPage._(this.songs, this._continuation);
+
+  final List<Song> songs;
+  final VideoSearchList? _continuation;
+
+  bool get hasMore => _continuation != null;
 }

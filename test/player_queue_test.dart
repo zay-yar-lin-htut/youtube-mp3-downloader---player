@@ -47,17 +47,6 @@ void main() {
       expect(q.peekPrevious()!.song.id, 'b');
     });
 
-    test('addToQueue appends to the end and skips duplicates', () {
-      final q = PlayerQueue();
-      q.resetForPlayback([_entry('a'), _entry('b')]);
-      q.addToQueue(_entry('c', source: PlaybackSource.preview));
-      expect(q.entries.length, 3);
-      expect(q.activeOrder.last.song.id, 'c');
-      expect(q.entries.map((e) => e.song.id), ['a', 'b', 'c']);
-      q.addToQueue(_entry('a'));
-      expect(q.entries.length, 3); // duplicate skipped
-    });
-
     test('removeSong returns whether it removed the current track', () {
       final q = PlayerQueue();
       q.resetForPlayback([_entry('a'), _entry('b')]);
@@ -67,21 +56,36 @@ void main() {
       expect(q.removeSong('x'), isFalse);
     });
 
-    test('removeAtActiveIndex slides cursor before removing', () {
+    test('updateSong replaces song details without changing cursor', () {
       final q = PlayerQueue();
       q.resetForPlayback([_entry('a'), _entry('b'), _entry('c')]);
       q.advance(); // b (cursor 1)
-      q.removeAtActiveIndex(0); // remove a
+      q.updateSong(Song(
+        id: 'b',
+        title: 'Updated B',
+        author: 'Author',
+        duration: '3:00',
+        thumbnailUrl: '',
+        localPath: '/tmp/b_new.m4a',
+      ));
+      expect(q.currentSong!.title, 'Updated B');
       expect(q.currentSong!.id, 'b');
-      expect(q.cursor, 0);
+      expect(q.currentSong!.localPath, '/tmp/b_new.m4a');
+      expect(q.cursor, 1);
+      expect(q.entries[1].song.title, 'Updated B');
     });
 
-    test('clearUpcoming drops tracks after current from both structures', () {
+    test('updateSong does nothing if id is not in the queue', () {
       final q = PlayerQueue();
-      q.resetForPlayback([_entry('a'), _entry('b'), _entry('c')]);
-      q.clearUpcoming();
-      expect(q.entries.map((e) => e.song.id), ['a']);
-      expect(q.activeOrder.map((e) => e.song.id), ['a']);
+      q.resetForPlayback([_entry('a'), _entry('b')]);
+      q.updateSong(Song(
+        id: 'x',
+        title: 'X',
+        author: '',
+        duration: '0:00',
+        thumbnailUrl: '',
+      ));
+      expect(q.entries.map((e) => e.song.id), ['a', 'b']);
     });
 
     test('enableShuffle pins current first and permutes the rest', () {

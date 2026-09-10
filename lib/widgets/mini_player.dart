@@ -136,6 +136,15 @@ class _MiniPlayerView extends StatelessWidget {
                         ),
                         onPressed: controller.next,
                       ),
+                      IconButton(
+                        tooltip: 'Close player',
+                        iconSize: 20,
+                        icon: const Icon(
+                          Icons.close_rounded,
+                          color: AppColors.textMuted,
+                        ),
+                        onPressed: controller.stopAndClear,
+                      ),
                     ],
                   ),
                 ],

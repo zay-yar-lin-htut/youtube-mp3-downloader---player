@@ -4,11 +4,15 @@ import '../player/music_player_controller.dart';
 import '../services/youtube_service.dart';
 import '../services/database_service.dart';
 import '../services/download_manager.dart';
+import '../services/search_suggestion_service.dart';
+import '../services/youtube_url.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_typography.dart';
 import '../widgets/song_tile.dart';
 import '../widgets/song_info_dialog.dart';
+import '../widgets/search_field.dart';
+import 'search_overlay.dart';
 
 class SearchScreen extends StatefulWidget {
   final YouTubeService youtubeService;
@@ -26,64 +30,175 @@ class SearchScreen extends StatefulWidget {
 
 class _SearchScreenState extends State<SearchScreen> {
   final TextEditingController _controller = TextEditingController();
+  late final RecentSearchStore _recents;
+
+  // Search results + pagination.
   List<Song> _results = [];
-  bool _isLoading = false;
-  final Set<String> _previewingIds = {};
-  final Set<String> _downloadingIds = {};
+  VideoSearchPage? _page;
+  bool _hasMore = false;
+  String? _activeQuery;
+  int _requestGeneration = 0;
+  bool _isInitialLoading = false;
+  bool _isResolvingUrl = false;
+  String? _initialError;
+  bool _isLoadingMore = false;
+  String? _loadMoreError;
+
+  bool _disposed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _recents = RecentSearchStore.db();
+  }
 
   @override
   void dispose() {
+    _disposed = true;
     _controller.dispose();
     super.dispose();
   }
 
-  Future<void> _search() async {
-    final query = _controller.text.trim();
-    if (query.isEmpty) return;
+  Future<void> _openSearchOverlay() async {
+    final query = await showGeneralDialog<String>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'Close search',
+      barrierColor: Colors.black54,
+      transitionDuration: const Duration(milliseconds: 200),
+      pageBuilder: (context, animation, secondaryAnimation) => SearchOverlay(
+        initialQuery: _controller.text,
+        fetchSuggestions: widget.youtubeService.getSearchSuggestions,
+        recents: _recents,
+      ),
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        return FadeTransition(opacity: animation, child: child);
+      },
+    );
+    if (query == null || query.isEmpty || _disposed || !mounted) {
+      return;
+    }
+    _submitSearch(query);
+  }
 
+  Future<void> _submitSearch([String? fixedQuery]) async {
+    final query = (fixedQuery ?? _controller.text).trim();
+    if (query.isEmpty) {
+      return;
+    }
+    _controller.text = query;
+    _controller.selection = TextSelection.collapsed(offset: query.length);
+
+    final videoId = extractYouTubeVideoId(query);
+    if (videoId == null) {
+      await _recents.add(query);
+      if (_disposed) {
+        return;
+      }
+    }
+
+    _activeQuery = query;
+    final generation = ++_requestGeneration;
     setState(() {
-      _isLoading = true;
-      _results = [];
+      _results = const [];
+      _page = null;
+      _hasMore = false;
+      _isInitialLoading = true;
+      _isResolvingUrl = videoId != null;
+      _initialError = null;
+      _loadMoreError = null;
+      _isLoadingMore = false;
     });
 
     try {
-      final results = await widget.youtubeService.searchVideos(query);
-      if (mounted) {
-        setState(() {
-          _results = results;
-        });
+      if (videoId != null) {
+        final song = await widget.youtubeService.getVideo(videoId);
+        if (mounted && generation == _requestGeneration) {
+          setState(() {
+            _results = [song];
+            _isInitialLoading = false;
+            _isResolvingUrl = false;
+          });
+        }
+      } else {
+        final page = await widget.youtubeService.searchVideos(query);
+        if (mounted && generation == _requestGeneration) {
+          setState(() {
+            _results = List.of(page.songs);
+            _page = page;
+            _hasMore = true;
+            _isInitialLoading = false;
+          });
+        }
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Search failed: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
+      debugPrint('[Search] search failed for "$query": $e');
+      if (mounted && generation == _requestGeneration) {
         setState(() {
-          _isLoading = false;
+          _isInitialLoading = false;
+          _isResolvingUrl = false;
+          _initialError = "Couldn't load search results.\nPlease try again.";
         });
       }
     }
   }
 
-  Future<void> _previewSong(Song song) async {
-    setState(() => _previewingIds.add(song.id));
-    await widget.playerController.playPreview(song);
-    if (mounted) {
-      setState(() => _previewingIds.remove(song.id));
+  Future<void> _loadMore() async {
+    if (_isLoadingMore || !_hasMore || _isInitialLoading) {
+      return;
     }
+    final page = _page;
+    final generation = _requestGeneration;
+    if (page == null) {
+      return;
+    }
+    setState(() {
+      _isLoadingMore = true;
+      _loadMoreError = null;
+    });
+    try {
+      final next = await widget.youtubeService.nextSearchPage(page);
+      if (mounted && generation == _requestGeneration) {
+        setState(() {
+          if (next == null) {
+            _hasMore = false;
+          } else {
+            _results = [..._results, ...next.songs];
+            _page = next;
+          }
+          _isLoadingMore = false;
+        });
+      }
+    } catch (e) {
+      debugPrint('[Search] pagination failed: $e');
+      if (mounted && generation == _requestGeneration) {
+        setState(() {
+          _isLoadingMore = false;
+          _loadMoreError = "Couldn't load more results.";
+        });
+      }
+    }
+  }
+
+  void _previewSong(Song song) {
+    widget.playerController.playPreview(song);
   }
 
   Future<void> _downloadSong(Song song) async {
     debugPrint('[Search] Download requested id=${song.id} title=${song.title}');
-    setState(() => _downloadingIds.add(song.id));
+    await DownloadManager.instance
+        .updateProgress(song.id, song.title, null);
     try {
       final localPath = await widget.youtubeService.downloadAudio(song);
       debugPrint('[Search] downloadAudio returned localPath=$localPath');
-      final savedSong = song.copyWith(localPath: localPath);
+      final savedSong = song.copyWith(
+        videoId: song.videoId ?? song.id,
+        localPath: localPath,
+        downloadedAt: DateTime.now().millisecondsSinceEpoch,
+        source: SongSource.downloaded,
+      );
       await DatabaseService.instance.insertSong(savedSong);
+      await DatabaseService.instance.insertHistory(savedSong);
       DownloadManager.instance.removeFailure(song.id);
       DownloadManager.instance.notifyHistoryChanged();
       if (mounted) {
@@ -94,13 +209,14 @@ class _SearchScreenState extends State<SearchScreen> {
     } catch (e) {
       DownloadManager.instance.recordFailure(song.id, song.title);
       if (mounted) {
+        final message = switch (e) {
+          DownloadRateLimitedException() || DownloadUnavailableException() =>
+            '$e',
+          _ => 'Download failed: $e',
+        };
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Download failed: $e')),
+          SnackBar(content: Text(message)),
         );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _downloadingIds.remove(song.id));
       }
     }
   }
@@ -116,101 +232,270 @@ class _SearchScreenState extends State<SearchScreen> {
       ),
       child: Column(
         children: [
-          TextField(
+          SearchLauncherBar(
+            key: const Key('search_launcher'),
             controller: _controller,
-            textInputAction: TextInputAction.search,
-            decoration: const InputDecoration(
-              hintText: 'Search YouTube music…',
-              prefixIcon: Icon(Icons.search),
-            ),
-            onSubmitted: (_) => _search(),
+            isLoading: _isInitialLoading || _isResolvingUrl,
+            onTap: _openSearchOverlay,
+            onSearchPressed: _openSearchOverlay,
           ),
           const SizedBox(height: AppSpacing.lg),
           Expanded(
-            child: _results.isEmpty
-                ? (_isLoading
-                    ? const Center(child: CircularProgressIndicator())
-                    : Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(
-                          Icons.library_music_outlined,
-                          size: 56,
-                          color: AppColors.textMuted,
-                        ),
-                        const SizedBox(height: AppSpacing.md),
-                        const Text(
-                          'Search for music on YouTube',
-                          style: AppTypography.caption,
-                        ),
-                      ],
-                    ),
-                  )
-                )
-                : ListView.builder(
-                    itemCount: _results.length,
-                    itemBuilder: (context, index) {
-                      final song = _results[index];
-                      final isPreviewing = _previewingIds.contains(song.id);
-                      final isDownloading = _downloadingIds.contains(song.id);
-                      final task = DownloadManager.instance.activeDownloads[song.id];
-                      final hasProgress = task != null && task.progress != null;
-                      return SongTile(
-                        song: song,
-                        onTap: () => _previewSong(song),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            IconButton(
-                              tooltip: 'More',
-                              icon: const Icon(
-                                Icons.more_vert,
-                                color: AppColors.textSecondary,
-                              ),
-                              onPressed: () => SongInfoDialog.show(context, song),
-                            ),
-                            IconButton(
-                              tooltip: 'Preview',
-                              icon: isPreviewing
-                                  ? const SizedBox(
-                                      width: 20,
-                                      height: 20,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                      ),
-                                    )
-                                  : const Icon(Icons.play_circle_outline),
-                              onPressed: isPreviewing ? null : () => _previewSong(song),
-                            ),
-                            IconButton(
-                              tooltip: 'Download',
-                              icon: isDownloading
-                                  ? (hasProgress
-                                      ? Padding(
-                                          padding: const EdgeInsets.all(6),
-                                          child: CircularProgressIndicator(
-                                            value: task.progress,
-                                            strokeWidth: 3,
-                                          ),
-                                        )
-                                      : const SizedBox(
-                                          width: 20,
-                                          height: 20,
-                                          child: CircularProgressIndicator(
-                                            strokeWidth: 2,
-                                          ),
-                                        ))
-                                  : const Icon(Icons.download_rounded),
-                              onPressed:
-                                  isDownloading ? null : () => _downloadSong(song),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
+            child: ListenableBuilder(
+              listenable: widget.playerController,
+              builder: (context, _) => _buildResultsArea(context),
+            ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildResultsArea(BuildContext context) {
+    if (_isInitialLoading) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const CircularProgressIndicator(),
+            const SizedBox(height: AppSpacing.md),
+            Text(
+              _isResolvingUrl
+                  ? 'Resolving YouTube video…'
+                  : 'Loading search results…',
+              style: AppTypography.caption,
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_initialError != null) {
+      return _MessagePane(
+        icon: Icons.cloud_off_rounded,
+        title: _initialError!,
+        actionLabel: 'Retry',
+        onAction: () => _submitSearch(),
+      );
+    }
+
+    if (_results.isEmpty) {
+      return _activeQuery == null
+          ? const _MessagePane(
+              icon: Icons.library_music_outlined,
+              title: 'Search for music on YouTube',
+            )
+          : _MessagePane(
+              icon: Icons.search_off_rounded,
+              title: 'No results found for "$_activeQuery"',
+              actionLabel: 'Try again',
+              onAction: () => _submitSearch(),
+            );
+    }
+
+    return NotificationListener<ScrollNotification>(
+      onNotification: (notification) {
+        if (notification.metrics.extentAfter < 400) {
+          _loadMore();
+        }
+        return false;
+      },
+      child: ListView.builder(
+        padding: EdgeInsets.zero,
+        itemCount: _results.length + 1,
+        itemBuilder: (context, index) {
+          if (index == _results.length) {
+            return _buildFooter(context);
+          }
+          final song = _results[index];
+          return Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+            child: SongTile(
+              song: song,
+              onTap: () => _previewSong(song),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    tooltip: 'More',
+                    icon: const Icon(
+                      Icons.more_vert,
+                      color: AppColors.textSecondary,
+                    ),
+                    onPressed: () => SongInfoDialog.show(context, song),
+                  ),
+                  _PreviewButton(
+                    song: song,
+                    controller: widget.playerController,
+                  ),
+                  _DownloadButton(song: song, onDownload: _downloadSong),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildFooter(BuildContext context) {
+    if (_loadMoreError != null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
+        child: Column(
+          children: [
+            Text(_loadMoreError!, style: AppTypography.caption),
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  _loadMoreError = null;
+                  _hasMore = true;
+                });
+                _loadMore();
+              },
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
+      );
+    }
+    if (_isLoadingMore) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: AppSpacing.lg),
+        child: Center(
+          child: SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2.5),
+          ),
+        ),
+      );
+    }
+    if (!_hasMore) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: AppSpacing.md),
+        child: Center(
+          child: Text('End of results', style: AppTypography.caption),
+        ),
+      );
+    }
+    return const SizedBox.shrink();
+  }
+}
+
+/// Preview button reflecting exactly one active preview: spinner while THIS
+/// song resolves/loads, play/pause while THIS song is the current track.
+class _PreviewButton extends StatelessWidget {
+  const _PreviewButton({
+    required this.song,
+    required this.controller,
+  });
+
+  final Song song;
+  final MusicPlayerController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final isLoading = controller.previewLoadingSongId == song.id;
+    final isCurrent = controller.currentSong?.id == song.id;
+    final playing = controller.isPlaying && isCurrent;
+    return IconButton(
+      tooltip: isLoading ? 'Loading preview…' : 'Preview',
+      icon: isLoading
+          ? const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : Icon(
+              playing ? Icons.pause_circle_outline : Icons.play_circle_outline,
+              color: isCurrent ? AppColors.primary : AppColors.textSecondary,
+            ),
+      onPressed: isLoading
+          ? null
+          : isCurrent
+              ? controller.togglePause
+              : () => controller.playPreview(song),
+    );
+  }
+}
+
+/// Download button that surfaces REAL byte progress from the downloader.
+class _DownloadButton extends StatelessWidget {
+  const _DownloadButton({required this.song, required this.onDownload});
+
+  final Song song;
+  final ValueChanged<Song> onDownload;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: DownloadManager.instance,
+      builder: (context, _) {
+        final task = DownloadManager.instance.activeDownloads[song.id];
+        if (task == null) {
+          return IconButton(
+            tooltip: 'Download',
+            icon: const Icon(Icons.download_rounded),
+            onPressed: () => onDownload(song),
+          );
+        }
+        if (task.isCompleted) {
+          return const Padding(
+            padding: EdgeInsets.all(12),
+            child: Icon(
+              Icons.check_circle_outline_rounded,
+              size: 22,
+              color: AppColors.success,
+            ),
+          );
+        }
+        return Padding(
+          padding: const EdgeInsets.all(12),
+          child: SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(
+              value: task.progress,
+              strokeWidth: 2.5,
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _MessagePane extends StatelessWidget {
+  const _MessagePane({
+    required this.icon,
+    required this.title,
+    this.actionLabel,
+    this.onAction,
+  });
+
+  final IconData icon;
+  final String title;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 56, color: AppColors.textMuted),
+          const SizedBox(height: AppSpacing.md),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: AppTypography.caption,
+          ),
+          if (actionLabel != null) ...[
+            const SizedBox(height: AppSpacing.sm),
+            TextButton(onPressed: onAction, child: Text(actionLabel!)),
+          ],
         ],
       ),
     );

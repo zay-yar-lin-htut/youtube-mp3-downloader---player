@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import '../models/song.dart';
 import '../services/audio_service.dart' show AudioService;
@@ -13,11 +15,14 @@ class MusicPlayerController extends ChangeNotifier {
     AudioEngine? engine,
     this.streamUrlResolver,
     PlayerQueue? queue,
+    DateTime Function()? clock,
   })  : engine = engine ?? AudioService(),
-        queue = queue ?? PlayerQueue();
+        queue = queue ?? PlayerQueue(),
+        _clock = clock ?? DateTime.now;
 
   final AudioEngine engine;
   final PlayerQueue queue;
+  final DateTime Function() _clock;
 
   /// Resolves a preview stream URL for a song id when playing previews.
   final Future<String?> Function(String songId)? streamUrlResolver;
@@ -25,8 +30,20 @@ class MusicPlayerController extends ChangeNotifier {
   RepeatStyle repeatMode = RepeatStyle.off;
   final Set<String> favorites = {};
 
+  /// Where the current playback context came from (e.g. a playlist name or a
+  /// system view like 'On device'). Shown as "From: X" in Now Playing and set
+  /// whenever a visible list starts playback.
+  String? playbackContextName;
+
   /// Non-recoverable error shown to the user (kept friendly, never raw).
   String? lastError;
+
+  /// Id of the preview currently resolving/loading, if any. Only one preview
+  /// may be active at a time; starting a new one invalidates the previous.
+  String? _previewLoadingSongId;
+  int _previewGeneration = 0;
+
+  String? get previewLoadingSongId => _previewLoadingSongId;
 
   bool get hasCurrentSong => queue.currentEntry != null;
 
@@ -113,8 +130,21 @@ class MusicPlayerController extends ChangeNotifier {
     await engine.seekTo(Duration.zero);
   }
 
+  /// Chooses the playback source for a song: downloaded file, device file/URI,
+  /// or a YouTube preview stream (in that order of preference).
+  static PlaybackSource sourceFor(Song song) {
+    if (song.source == SongSource.device) {
+      return PlaybackSource.device;
+    }
+    if (song.localPath != null) {
+      return PlaybackSource.local;
+    }
+    return PlaybackSource.preview;
+  }
+
   Future<void> playLocal(Song song) async {
     _resetError();
+    playbackContextName = null;
     queue.insertAndPlay(QueueEntry(song: song, source: PlaybackSource.local));
     notifyListeners();
     try {
@@ -124,8 +154,10 @@ class MusicPlayerController extends ChangeNotifier {
     }
   }
 
-  Future<void> playLocalList(List<Song> songs, {int index = 0}) async {
+  Future<void> playLocalList(List<Song> songs,
+      {int index = 0, String? contextName}) async {
     _resetError();
+    playbackContextName = contextName;
     final entries = songs
         .map((s) => QueueEntry(song: s, source: PlaybackSource.local))
         .toList();
@@ -137,25 +169,66 @@ class MusicPlayerController extends ChangeNotifier {
     await _playCurrentEntry();
   }
 
+  /// Plays a list of songs using each song's own source (download / device /
+  /// preview), useful for the Playlist view.
+  Future<void> playSongList(List<Song> songs,
+      {int index = 0, String? contextName}) async {
+    playbackContextName = contextName;
+    final entries = <QueueEntry>[];
+    for (final song in songs) {
+      entries.add(QueueEntry(song: song, source: sourceFor(song)));
+    }
+    if (entries.isEmpty) {
+      return;
+    }
+    _resetError();
+    queue.resetForPlayback(entries, playIndex: index);
+    notifyListeners();
+    await _playCurrentEntry();
+  }
+
   Future<void> playPreview(Song song) async {
     _resetError();
+    playbackContextName = null;
+    final generation = ++_previewGeneration;
+    _previewLoadingSongId = song.id;
+    queue.insertAndPlay(QueueEntry(song: song, source: PlaybackSource.preview));
+    notifyListeners();
+    // Stop any previously-playing source so only the new preview can sound.
+    // Starting preview B while A is still resolving cancels A via the
+    // generation guard below — its future result is silently dropped.
+    await engine.stop();
+    if (generation != _previewGeneration) {
+      return; // superseded before we even resolved the URL
+    }
     if (streamUrlResolver == null) {
       lastError = 'Preview unavailable';
+      _previewLoadingSongId = null;
       notifyListeners();
       return;
     }
-    queue.insertAndPlay(QueueEntry(song: song, source: PlaybackSource.preview));
-    notifyListeners();
     try {
       final url = await streamUrlResolver!(song.id);
+      if (generation != _previewGeneration) {
+        return; // stale result — a newer preview owns the player now
+      }
       if (url == null) {
         queue.removeSong(song.id);
+        _previewLoadingSongId = null;
         lastError = 'No stream found for ${song.title}';
         notifyListeners();
         return;
       }
       await engine.loadRemote(url);
+      if (generation != _previewGeneration) {
+        return;
+      }
+      _previewLoadingSongId = null;
+      notifyListeners();
     } catch (e) {
+      if (generation != _previewGeneration) {
+        return;
+      }
       _playbackFailed(song, e);
     }
   }
@@ -166,7 +239,9 @@ class MusicPlayerController extends ChangeNotifier {
       return;
     }
     try {
-      if (entry.source == PlaybackSource.local && entry.song.localPath != null) {
+      if (entry.song.localPath != null &&
+          (entry.source == PlaybackSource.local ||
+              entry.source == PlaybackSource.device)) {
         await engine.loadLocal(entry.song.localPath!);
       } else {
         final url = await streamUrlResolver?.call(entry.song.id);
@@ -186,6 +261,9 @@ class MusicPlayerController extends ChangeNotifier {
   void _playbackFailed(Song song, Object error) {
     debugPrint('[MusicPlayerController] play failed for ${song.title}: $error');
     lastError = _friendlyError(error);
+    if (_previewLoadingSongId == song.id) {
+      _previewLoadingSongId = null;
+    }
     queue.removeSong(song.id);
     notifyListeners();
     // Engine might be stuck in loading; force it idle so the mini-player hides.
@@ -272,36 +350,63 @@ class MusicPlayerController extends ChangeNotifier {
 
   bool isFavorite(String songId) => favorites.contains(songId);
 
-  void addToQueue(Song song, {PlaybackSource source = PlaybackSource.local}) {
-    queue.addToQueue(QueueEntry(song: song, source: source));
+  /// Propagates a song edit (rename) to the live queue so playback and the
+  /// mini-player reflect the new title/path. Queue identity and memberships
+  /// are untouched because the song id never changes.
+  void updateSong(Song updated) {
+    queue.updateSong(updated);
     notifyListeners();
   }
 
-  Future<void> playAtActiveIndex(int index) async {
-    queue.goToActiveIndex(index);
-    await _playCurrentEntry();
+  /// --- Sleep timer ---------------------------------------------------------
+  ///
+  /// A single absolute end time owned by this app-scoped controller, so the
+  /// timer survives navigation, tab switches and rebuilds. Expiry pauses
+  /// playback (it never deletes anything).
+  DateTime? _sleepTimerEndsAt;
+  Timer? _sleepTicker;
+
+  bool get hasSleepTimer => _sleepTimerEndsAt != null;
+
+  DateTime? get sleepTimerEndsAt => _sleepTimerEndsAt;
+
+  Duration? get sleepTimerRemaining {
+    final end = _sleepTimerEndsAt;
+    if (end == null) return null;
+    final remaining = end.difference(_clock());
+    return remaining.isNegative ? Duration.zero : remaining;
   }
 
-  Future<void> removeAtActiveIndex(int index) async {
-    final current = queue.currentSong;
-    final removed = queue.removeAtActiveIndex(index);
-    if (removed == null) {
-      return;
-    }
-    if (current?.id == removed.song.id) {
-      if (queue.currentEntry != null) {
-        await _playCurrentEntry();
-      } else {
-        await stopAndClear();
-      }
-    }
+  void startSleepTimer(Duration duration) {
+    _sleepTimerEndsAt = _clock().add(duration);
+    _sleepTicker?.cancel();
+    _sleepTicker = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _checkSleepTimer(),
+    );
     notifyListeners();
   }
 
-  void clearQueue() {
-    queue.clearUpcoming();
+  void cancelSleepTimer() {
+    _sleepTimerEndsAt = null;
+    _sleepTicker?.cancel();
+    _sleepTicker = null;
     notifyListeners();
   }
+
+  Future<void> _checkSleepTimer() async {
+    final end = _sleepTimerEndsAt;
+    if (end == null) return;
+    if (_clock().isBefore(end)) return;
+    _sleepTimerEndsAt = null;
+    _sleepTicker?.cancel();
+    _sleepTicker = null;
+    await engine.pause();
+    notifyListeners();
+  }
+
+  @visibleForTesting
+  Future<void> triggerSleepTimerCheck() => _checkSleepTimer();
 
   void clearEverything() {
     queue.removeAll();
@@ -312,6 +417,10 @@ class MusicPlayerController extends ChangeNotifier {
   /// if it was current. ([PersistedDownloadManager] removes from DB + disk.)
   Future<void> handleSongDeleted(String songId) async {
     final wasCurrent = queue.currentSong?.id == songId;
+    if (_previewLoadingSongId == songId) {
+      _previewGeneration++;
+      _previewLoadingSongId = null;
+    }
     if (wasCurrent) {
       queue.removeSong(songId);
       await stopAndClear();
@@ -322,6 +431,9 @@ class MusicPlayerController extends ChangeNotifier {
   }
 
   Future<void> stopAndClear() async {
+    _previewGeneration++; // invalidate any in-flight preview
+    _previewLoadingSongId = null;
+    playbackContextName = null;
     await engine.stop();
     queue.removeAll();
     _position.value = Duration.zero;
@@ -358,6 +470,8 @@ class MusicPlayerController extends ChangeNotifier {
       return;
     }
     _disposed = true;
+    _sleepTicker?.cancel();
+    _sleepTicker = null;
     engine.stage.removeListener(_onEngineStageChanged);
     engine.position.removeListener(_onPositionChanged);
     engine.duration.removeListener(_onDurationChanged);

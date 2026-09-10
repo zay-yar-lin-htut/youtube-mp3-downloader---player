@@ -13,6 +13,7 @@ class SongTile extends StatelessWidget {
     required this.song,
     this.onTap,
     this.subtitle,
+    this.badge,
     this.trailing,
     this.isActive = false,
   });
@@ -20,12 +21,15 @@ class SongTile extends StatelessWidget {
   final Song song;
   final VoidCallback? onTap;
   final String? subtitle;
+
+  /// Small pill label (e.g. "Downloaded" / "On device" / "YouTube").
+  final String? badge;
+
   final Widget? trailing;
   final bool isActive;
 
   @override
   Widget build(BuildContext context) {
-    final subtitleText = subtitle ?? '${song.author} · ${song.duration}';
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(AppRadius.md),
@@ -53,17 +57,27 @@ class SongTile extends StatelessWidget {
                     style: AppTypography.songTitle,
                   ),
                   if (isActive) const SizedBox(height: 2),
-                  Text(
-                    isActive ? 'Now playing' : subtitleText,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: isActive
-                        ? const TextStyle(
-                            fontSize: 12,
-                            color: AppColors.primary,
-                            fontWeight: FontWeight.w500,
-                          )
-                        : AppTypography.songSubtitle,
+                  Row(
+                    children: [
+                      Flexible(
+                        child: Text(
+                          isActive ? 'Now playing' : subtitleText,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: isActive
+                              ? const TextStyle(
+                                  fontSize: 12,
+                                  color: AppColors.primary,
+                                  fontWeight: FontWeight.w500,
+                                )
+                              : AppTypography.songSubtitle,
+                        ),
+                      ),
+                      if (badge != null && !isActive) ...[
+                        const SizedBox(width: AppSpacing.sm),
+                        _SourceBadge(label: badge!),
+                      ],
+                    ],
                   ),
                 ],
               ),
@@ -74,6 +88,34 @@ class SongTile extends StatelessWidget {
             ],
           ],
         ),
+      ),
+    );
+  }
+
+  String get subtitleText => subtitle ?? '${song.author} · ${song.duration}';
+}
+
+class _SourceBadge extends StatelessWidget {
+  const _SourceBadge({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = switch (label) {
+      'Downloaded' => AppColors.success,
+      'On device' => AppColors.tertiary,
+      _ => AppColors.textSecondary,
+    };
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(fontSize: 10, color: color),
       ),
     );
   }

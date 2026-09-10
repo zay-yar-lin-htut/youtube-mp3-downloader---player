@@ -20,3 +20,20 @@ String formatBytes(int bytes) {
   }
   return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
 }
+
+const List<String> _months = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+];
+
+/// Formats an epoch-milliseconds timestamp as e.g. "Sep 9, 2026, 6:21 PM".
+String formatDownloaded(int epochMs) {
+  final t = DateTime.fromMillisecondsSinceEpoch(epochMs);
+  var hour = t.hour % 12;
+  if (hour == 0) {
+    hour = 12;
+  }
+  final minute = t.minute.toString().padLeft(2, '0');
+  final ampm = t.hour >= 12 ? 'PM' : 'AM';
+  return '${_months[t.month - 1]} ${t.day}, ${t.year}, $hour:$minute $ampm';
+}

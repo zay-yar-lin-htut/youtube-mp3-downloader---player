@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import '../models/song.dart';
 import '../player/audio_engine.dart';
 import '../player/music_player_controller.dart';
@@ -9,7 +10,6 @@ import '../theme/app_radius.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_typography.dart';
 import '../widgets/artwork.dart';
-import '../widgets/queue_sheet.dart';
 
 /// Full-screen playback page opened from the mini player.
 class NowPlayingScreen extends StatelessWidget {
@@ -29,11 +29,7 @@ class NowPlayingScreen extends StatelessWidget {
         ),
         title: const Text('Now Playing', style: AppTypography.appBarTitle),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.queue_music_rounded),
-            tooltip: 'Queue',
-            onPressed: () => QueueSheet.show(context, controller),
-          ),
+          _SleepTimerButton(controller: controller),
         ],
       ),
       body: ListenableBuilder(
@@ -60,7 +56,7 @@ class _NowPlayingBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final isLocal = controller.currentSource == PlaybackSource.local;
+    final source = controller.currentSource;
     return SafeArea(
       child: Column(
         children: [
@@ -95,8 +91,16 @@ class _NowPlayingBody extends StatelessWidget {
                               song.author,
                               style: AppTypography.songSubtitle,
                             ),
-                            const SizedBox(height: AppSpacing.sm),
-                            _sourceChip(isLocal, context),
+                            if (source != null) ...[
+                              const SizedBox(height: AppSpacing.sm),
+                              _sourceChip(source, context),
+                            ],
+                            if (controller.playbackContextName != null) ...[
+                              const SizedBox(height: AppSpacing.sm),
+                              _contextChip(controller.playbackContextName!),
+                            ],
+                            const SizedBox(height: AppSpacing.xs),
+                            _sourceUrlRow(context),
                           ],
                         ),
                       ),
@@ -114,7 +118,24 @@ class _NowPlayingBody extends StatelessWidget {
     );
   }
 
-  Widget _sourceChip(bool isLocal, BuildContext context) {
+  Widget _sourceChip(PlaybackSource source, BuildContext context) {
+    final (label, icon, color) = switch (source) {
+      PlaybackSource.local => (
+          'Downloaded file',
+          Icons.offline_pin_rounded,
+          AppColors.success,
+        ),
+      PlaybackSource.device => (
+          'On device',
+          Icons.smartphone_rounded,
+          AppColors.tertiary,
+        ),
+      PlaybackSource.preview => (
+          'Preview stream',
+          Icons.cloud_rounded,
+          AppColors.textSecondary,
+        ),
+    };
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: 4),
       decoration: BoxDecoration(
@@ -124,18 +145,76 @@ class _NowPlayingBody extends StatelessWidget {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(
-            isLocal ? Icons.offline_pin_rounded : Icons.cloud_rounded,
-            size: 14,
-            color: isLocal ? AppColors.success : AppColors.textSecondary,
-          ),
+          Icon(icon, size: 14, color: color),
           const SizedBox(width: 4),
           Text(
-            isLocal ? 'Local file' : 'Preview stream',
+            label,
             style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _contextChip(String name) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md, vertical: 4),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceElevated,
+        borderRadius: BorderRadius.circular(AppRadius.pill),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.queue_music_rounded, size: 14, color: AppColors.primary),
+          const SizedBox(width: 4),
+          Text(
+            'From: $name',
+            style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// The REAL source: the canonical YouTube watch URL (never a fabricated or
+  /// temporary stream URL). Truncated for display, copyable in full.
+  Widget _sourceUrlRow(BuildContext context) {
+    final url = song.canonicalYoutubeUrl;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(Icons.link_rounded, size: 13, color: AppColors.textMuted),
+        const SizedBox(width: 4),
+        Flexible(
+          child: Text(
+            url,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 12,
+              color: AppColors.textMuted,
+            ),
+          ),
+        ),
+        InkWell(
+          borderRadius: BorderRadius.circular(AppRadius.sm),
+          onTap: () {
+            Clipboard.setData(ClipboardData(text: url));
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Source URL copied')),
+            );
+          },
+          child: const Padding(
+            padding: EdgeInsets.all(4),
+            child: Icon(
+              Icons.copy_rounded,
+              size: 14,
+              color: AppColors.textSecondary,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -272,6 +351,203 @@ class _Controls extends StatelessWidget {
                 ? AppColors.textSecondary
                 : AppColors.primary,
           ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SleepTimerButton extends StatelessWidget {
+  const _SleepTimerButton({required this.controller});
+  final MusicPlayerController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        return IconButton(
+          tooltip: 'Sleep timer',
+          icon: Icon(
+            Icons.bedtime_rounded,
+            color: controller.hasSleepTimer
+                ? AppColors.primary
+                : AppColors.textSecondary,
+          ),
+          onPressed: () => _showTimerSheet(context),
+        );
+      },
+    );
+  }
+
+  void _showTimerSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(
+          top: Radius.circular(AppRadius.lg),
+        ),
+      ),
+      builder: (sheetContext) {
+        final remaining = controller.sleepTimerRemaining;
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: AppSpacing.md),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.only(top: AppSpacing.sm),
+                  child: Text(
+                    'Sleep timer',
+                    style: TextStyle(
+                      color: AppColors.textPrimary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                if (remaining != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: AppSpacing.xs),
+                    child: Text(
+                      _formatDuration(remaining),
+                      style: AppTypography.caption,
+                    ),
+                  ),
+                if (controller.hasSleepTimer)
+                  TextButton(
+                    onPressed: () {
+                      controller.cancelSleepTimer();
+                      Navigator.of(sheetContext).pop();
+                    },
+                    child: const Text(
+                      'Cancel timer',
+                      style: TextStyle(color: AppColors.error),
+                    ),
+                  ),
+                const SizedBox(height: AppSpacing.xs),
+                _timerRow(sheetContext, '15 minutes', const Duration(minutes: 15)),
+                _timerRow(sheetContext, '30 minutes', const Duration(minutes: 30)),
+                _timerRow(sheetContext, '45 minutes', const Duration(minutes: 45)),
+                _timerRow(sheetContext, '60 minutes', const Duration(minutes: 60)),
+                _timerRow(sheetContext, '90 minutes', const Duration(minutes: 90)),
+                ListTile(
+                  dense: true,
+                  title: const Text(
+                    'Custom minutes…',
+                    style: TextStyle(color: AppColors.textPrimary),
+                  ),
+                  leading: const Icon(Icons.schedule_rounded,
+                      color: AppColors.textSecondary),
+                  onTap: () => _openCustomMinutes(sheetContext),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _openCustomMinutes(BuildContext sheetContext) {
+    showDialog<int>(
+      context: sheetContext,
+      builder: (_) => const _MinutePickerDialog(),
+    ).then((minutes) {
+      if (minutes == null) return;
+      if (!sheetContext.mounted) return;
+      controller.startSleepTimer(Duration(minutes: minutes));
+      Navigator.of(sheetContext).pop();
+    });
+  }
+
+  Widget _timerRow(BuildContext context, String label, Duration duration) {
+    return ListTile(
+      dense: true,
+      title: Text(
+        label,
+        style: const TextStyle(color: AppColors.textPrimary),
+      ),
+      leading: const Icon(Icons.bedtime_rounded, color: AppColors.textSecondary),
+      onTap: () {
+        controller.startSleepTimer(duration);
+        Navigator.of(context).pop();
+      },
+    );
+  }
+
+  String _formatDuration(Duration? d) {
+    if (d == null) return '0:00';
+    final mins = d.inMinutes;
+    final secs = d.inSeconds % 60;
+    if (mins >= 60) {
+      final hrs = mins ~/ 60;
+      final remainMins = mins % 60;
+      return '${hrs}h ${remainMins}m';
+    }
+    return '$mins:${secs.toString().padLeft(2, '0')}';
+  }
+}
+
+class _MinutePickerDialog extends StatefulWidget {
+  const _MinutePickerDialog();
+
+  @override
+  State<_MinutePickerDialog> createState() => _MinutePickerDialogState();
+}
+
+class _MinutePickerDialogState extends State<_MinutePickerDialog> {
+  final TextEditingController _minutesInput = TextEditingController();
+
+  @override
+  void dispose() {
+    _minutesInput.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final minutes = int.tryParse(_minutesInput.text.trim());
+    if (minutes == null || minutes <= 0 || minutes > 24 * 60) return;
+    Navigator.of(context).pop(minutes);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: AppColors.surface,
+      title: const Text(
+        'Sleep timer',
+        style: TextStyle(color: AppColors.textPrimary),
+      ),
+      content: TextField(
+        controller: _minutesInput,
+        autofocus: true,
+        keyboardType: TextInputType.number,
+        decoration: const InputDecoration(
+          labelText: 'Minutes',
+          labelStyle: TextStyle(color: AppColors.textSecondary),
+          hintText: 'e.g. 25',
+          hintStyle: TextStyle(color: AppColors.textMuted),
+          enabledBorder: UnderlineInputBorder(
+            borderSide: BorderSide(color: AppColors.textMuted),
+          ),
+        ),
+        style: const TextStyle(color: AppColors.textPrimary),
+        onSubmitted: (_) => _submit(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text(
+            'Cancel',
+            style: TextStyle(color: AppColors.textSecondary),
+          ),
+        ),
+        TextButton(
+          onPressed: _submit,
+          child:
+              const Text('Start', style: TextStyle(color: AppColors.primary)),
         ),
       ],
     );

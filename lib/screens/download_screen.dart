@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../models/song.dart';
+import '../player/time_format.dart';
 import '../services/download_manager.dart';
 import '../services/database_service.dart';
 import '../theme/app_colors.dart';
@@ -7,6 +8,7 @@ import '../theme/app_radius.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_typography.dart';
 import '../widgets/song_tile.dart';
+import '../widgets/song_info_dialog.dart';
 
 class DownloadScreen extends StatefulWidget {
   const DownloadScreen({super.key});
@@ -42,7 +44,7 @@ class _DownloadScreenState extends State<DownloadScreen> {
 
   Future<void> _loadHistory() async {
     try {
-      final songs = await DatabaseService.instance.getPlaylist();
+      final songs = await DatabaseService.instance.getDownloadHistory();
       if (mounted) {
         setState(() => _history = songs);
       }
@@ -52,6 +54,38 @@ class _DownloadScreenState extends State<DownloadScreen> {
       if (mounted) {
         setState(() => _isLoading = false);
       }
+    }
+  }
+
+  Future<void> _confirmClearHistory() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear download history'),
+        content: const Text(
+          'This clears the download records only.\n\n'
+          'Your downloaded audio files and your library are NOT deleted.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Clear', style: TextStyle(color: AppColors.error)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    await DatabaseService.instance.clearDownloadHistory();
+    DownloadManager.instance.notifyHistoryChanged();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Download history cleared')),
+      );
     }
   }
 
@@ -120,15 +154,49 @@ class _DownloadScreenState extends State<DownloadScreen> {
                 ),
                 const SizedBox(height: AppSpacing.xl),
               ],
-              _SectionLabel('Downloaded (${_history.length})'),
-              const SizedBox(height: AppSpacing.xs),
+              Padding(
+                padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+                child: Row(
+                  children: [
+                    Text(
+                      'Download history (${_history.length})',
+                      style: AppTypography.playlistUbuntu,
+                    ),
+                    const Spacer(),
+                    if (_history.isNotEmpty)
+                      TextButton(
+                        onPressed: _confirmClearHistory,
+                        child: const Text(
+                          'Clear history',
+                          style: TextStyle(color: AppColors.error),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
               if (_history.isEmpty)
                 const Padding(
                   padding: EdgeInsets.symmetric(vertical: AppSpacing.xxl),
                   child: Center(
-                    child: Text(
-                      'No downloads yet',
-                      style: AppTypography.caption,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.history_rounded,
+                          size: 56,
+                          color: AppColors.textMuted,
+                        ),
+                        SizedBox(height: AppSpacing.md),
+                        Text(
+                          'No download history',
+                          style: AppTypography.caption,
+                        ),
+                        SizedBox(height: AppSpacing.xs),
+                        Text(
+                          'Completed downloads appear here with timestamps',
+                          style: AppTypography.caption,
+                        ),
+                      ],
                     ),
                   ),
                 )
@@ -136,7 +204,13 @@ class _DownloadScreenState extends State<DownloadScreen> {
                 ..._history.map(
                   (song) => Padding(
                     padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-                    child: SongTile(song: song),
+                    child: SongTile(
+                      song: song,
+                      subtitle: song.downloadedAt == null
+                          ? 'Downloaded'
+                          : 'Downloaded · ${formatDownloaded(song.downloadedAt!)}',
+                      onTap: () => SongInfoDialog.show(context, song),
+                    ),
                   ),
                 ),
             ],

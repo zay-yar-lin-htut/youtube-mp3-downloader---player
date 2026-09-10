@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yt_local_music/models/song.dart';
 import 'package:yt_local_music/player/audio_engine.dart';
@@ -148,29 +149,86 @@ void main() {
       expect(controller.currentSong!.id, 'a');
     });
 
-    test('addToQueue appends and can be played', () async {
-      await controller.playLocal(_song('a', path: '/a.m4a'));
-      controller.addToQueue(_song('b', path: '/b.m4a'));
-      expect(controller.queue.peekNext()!.song.id, 'b');
-      await controller.playAtActiveIndex(1);
-      expect(controller.currentSong!.id, 'b');
-    });
-
-    test('removeAtActiveIndex of current switches to next', () async {
-      await controller.playLocalList([
-        _song('a', path: '/a.m4a'),
-        _song('b', path: '/b.m4a'),
-      ]);
-      await controller.removeAtActiveIndex(0);
-      expect(controller.currentSong!.id, 'b');
-      expect(controller.isPlaying, isTrue);
-    });
-
     test('stopAndClear empties everything', () async {
       await controller.playLocal(_song('a', path: '/a.m4a'));
       await controller.stopAndClear();
       expect(controller.hasCurrentSong, isFalse);
       expect(controller.stage, EngineStage.idle);
+    });
+  });
+
+  group('MusicPlayerController sleep timer', () {
+    test('start and cancel timer', () {
+      controller.dispose();
+      controller = MusicPlayerController(
+        engine: FakeAudioEngine(),
+        clock: () => DateTime(2025),
+      );
+      controller.init();
+      addTearDown(controller.dispose);
+
+      controller.startSleepTimer(const Duration(minutes: 30));
+      expect(controller.hasSleepTimer, isTrue);
+      expect(controller.sleepTimerEndsAt, DateTime(2025).add(const Duration(minutes: 30)));
+      final remaining = controller.sleepTimerRemaining;
+      expect(remaining, isNotNull);
+      expect(remaining!.inMinutes, 30);
+
+      controller.cancelSleepTimer();
+      expect(controller.hasSleepTimer, isFalse);
+      expect(controller.sleepTimerRemaining, isNull);
+    });
+
+    test('timer expiry pauses playback', () async {
+      var now = DateTime(2025);
+      controller.dispose();
+      controller = MusicPlayerController(
+        engine: engine,
+        clock: () => now,
+      );
+      controller.init();
+      addTearDown(controller.dispose);
+
+      await controller.playLocal(_song('a', path: '/a.m4a'));
+      expect(controller.isPlaying, isTrue);
+
+      controller.startSleepTimer(const Duration(minutes: 5));
+      // Simulate time passing.
+      now = now.add(const Duration(minutes: 5));
+      await controller.triggerSleepTimerCheck();
+      expect(controller.isPlaying, isFalse);
+      expect(controller.hasSleepTimer, isFalse);
+    });
+  });
+
+  group('MusicPlayerController context', () {
+    test('playSongList sets context name', () async {
+      await controller.playSongList(
+        [_song('a', path: '/a.m4a')],
+        contextName: 'Workout',
+      );
+      expect(controller.playbackContextName, 'Workout');
+    });
+
+    test('playLocal clears context name', () async {
+      controller.playbackContextName = 'Workout';
+      await controller.playLocal(_song('a', path: '/a.m4a'));
+      expect(controller.playbackContextName, isNull);
+    });
+
+    test('stopAndClear clears context name', () async {
+      controller.playbackContextName = 'Workout';
+      await controller.stopAndClear();
+      expect(controller.playbackContextName, isNull);
+    });
+
+    test('updateSong propagates to current queue entry', () async {
+      await controller.playLocal(_song('a', path: '/a.m4a'));
+      expect(controller.currentSong!.title, 'Title a');
+
+      controller.updateSong(_song('a', path: '/a_new.m4a'));
+      expect(controller.currentSong!.title, 'Title a');
+      expect(controller.currentSong!.localPath, '/a_new.m4a');
     });
   });
 
@@ -219,6 +277,195 @@ void main() {
       await controller.handleSongDeleted('b');
       expect(controller.currentSong!.id, 'a');
       expect(controller.queue.length, 1);
+    });
+  });
+
+  group('MusicPlayerController preview switching', () {
+    test('exposes a loading id while resolving and clears it after load',
+        () async {
+      final gate = Completer<String>();
+      controller.dispose();
+      controller = MusicPlayerController(
+        engine: engine,
+        streamUrlResolver: (_) => gate.future,
+      );
+      controller.init();
+
+      final pending = controller.playPreview(_song('preview', path: null));
+      expect(controller.previewLoadingSongId, 'preview');
+      expect(controller.currentSong!.id, 'preview');
+
+      gate.complete('https://stream/preview');
+      await pending;
+      expect(controller.previewLoadingSongId, isNull);
+      expect(controller.currentSong!.id, 'preview');
+      expect(engine.loadedSources.last, 'https://stream/preview');
+    });
+
+    test('starting a second preview supersedes the first while it resolves',
+        () async {
+      final gateA = Completer<String>();
+      final gateB = Completer<String>();
+      controller.dispose();
+      controller = MusicPlayerController(
+        engine: engine,
+        streamUrlResolver: (id) => id == 'a' ? gateA.future : gateB.future,
+      );
+      controller.init();
+
+      final previewA = controller.playPreview(_song('a'));
+      expect(controller.previewLoadingSongId, 'a');
+      final previewB = controller.playPreview(_song('b'));
+      expect(controller.previewLoadingSongId, 'b');
+      expect(controller.currentSong!.id, 'b');
+
+      // The stale preview A resolves late — its stream must never be loaded.
+      gateA.complete('https://stream/a');
+      await previewA;
+      expect(engine.loadedSources, isEmpty);
+      expect(controller.currentSong!.id, 'b');
+      expect(controller.previewLoadingSongId, 'b');
+
+      gateB.complete('https://stream/b');
+      await previewB;
+      expect(controller.previewLoadingSongId, isNull);
+      expect(controller.currentSong!.id, 'b');
+      expect(engine.loadedSources, ['https://stream/b']);
+    });
+
+    test('stopAndClear invalidates an in-flight preview', () async {
+      final gate = Completer<String>();
+      controller.dispose();
+      controller = MusicPlayerController(
+        engine: engine,
+        streamUrlResolver: (_) => gate.future,
+      );
+      controller.init();
+
+      final pending = controller.playPreview(_song('a'));
+      await controller.stopAndClear();
+      expect(controller.hasCurrentSong, isFalse);
+
+      gate.complete('https://stream/a');
+      await pending;
+      expect(controller.hasCurrentSong, isFalse);
+      expect(engine.loadedSources, isEmpty);
+      expect(controller.previewLoadingSongId, isNull);
+    });
+
+    test('handleSongDeleted invalidates an in-flight preview for that song',
+        () async {
+      final gate = Completer<String>();
+      controller.dispose();
+      controller = MusicPlayerController(
+        engine: engine,
+        streamUrlResolver: (_) => gate.future,
+      );
+      controller.init();
+
+      final pending = controller.playPreview(_song('a'));
+      expect(controller.previewLoadingSongId, 'a');
+      await controller.handleSongDeleted('a');
+      expect(controller.hasCurrentSong, isFalse);
+
+      gate.complete('https://stream/a');
+      await pending;
+      expect(engine.loadedSources, isEmpty);
+      expect(controller.previewLoadingSongId, isNull);
+    });
+
+    test('a failed preview clears the loading id so the row can be retried',
+        () async {
+      final gate = Completer<String>();
+      controller.dispose();
+      controller = MusicPlayerController(
+        engine: engine,
+        streamUrlResolver: (_) => gate.future,
+      );
+      controller.init();
+
+      final pending = controller.playPreview(_song('bad'));
+      expect(controller.previewLoadingSongId, 'bad');
+
+      gate.completeError(StateError('unavailable'));
+      await pending;
+      expect(controller.currentSong, isNull);
+      expect(controller.previewLoadingSongId, isNull);
+    });
+  });
+
+  group('MusicPlayerController playSongList', () {
+    test('routes a device song through the local engine with a device URI',
+        () async {
+      final deviceSong = Song(
+        id: 'd_123',
+        title: 'Device track',
+        author: 'Album Artist',
+        duration: '4:11',
+        thumbnailUrl: '',
+        localPath: 'content://media/external/audio/media/999',
+        source: SongSource.device,
+      );
+      await controller.playSongList([deviceSong]);
+      expect(controller.currentSong!.id, 'd_123');
+      expect(controller.currentSource, PlaybackSource.device);
+      expect(controller.isPlaying, isTrue);
+      expect(engine.loadedSources.first,
+          'file:content://media/external/audio/media/999');
+    });
+
+    test('routes downloaded and preview entries by their own sources', () async {
+      controller.dispose();
+      controller = MusicPlayerController(
+        engine: engine,
+        streamUrlResolver: (id) async => 'https://stream/$id',
+      );
+      controller.init();
+
+      final downloaded = _song('dl', path: '/data/audio/dl.m4a');
+      final device = Song(
+        id: 'd_abc',
+        title: 'Device track',
+        author: 'Artist',
+        duration: '2:00',
+        thumbnailUrl: '',
+        localPath: 'content://media/external/audio/media/7',
+        source: SongSource.device,
+      );
+      final onlyYt = _song('yt'); // no local file -> preview
+
+      await controller.playSongList([downloaded, device, onlyYt], index: 1);
+      expect(controller.currentSong!.id, 'd_abc');
+      expect(controller.currentSource, PlaybackSource.device);
+      expect(engine.loadedSources.first,
+          'file:content://media/external/audio/media/7');
+
+      await controller.playSongList([downloaded, device, onlyYt], index: 2);
+      expect(controller.currentSource, PlaybackSource.preview);
+      expect(engine.loadedSources.last, 'https://stream/yt');
+    });
+
+    test('sourceFor picks device, then local, then preview', () {
+      expect(
+        MusicPlayerController.sourceFor(_song('a')), // no path
+        PlaybackSource.preview,
+      );
+      expect(
+        MusicPlayerController.sourceFor(_song('b', path: '/x/b.m4a')),
+        PlaybackSource.local,
+      );
+      expect(
+        MusicPlayerController.sourceFor(Song(
+          id: 'd',
+          title: 't',
+          author: 'a',
+          duration: '1:00',
+          thumbnailUrl: '',
+          localPath: 'content://media/external/audio/media/1',
+          source: SongSource.device,
+        )),
+        PlaybackSource.device,
+      );
     });
   });
 }

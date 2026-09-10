@@ -33,15 +33,29 @@ void main() {
     // Mini player is hidden while nothing is playing.
     expect(find.text('Song a'), findsNothing);
 
+    // Playlist root shows system views + custom playlists.
     await tester.tap(find.text('Playlist'));
     await tester.pumpAndSettle();
-    expect(find.text('Nothing downloaded yet'), findsOneWidget);
-    // Back to Search.
+    expect(find.text('Playlists'), findsOneWidget);
+    expect(find.text('All'), findsOneWidget);
+    expect(find.text('Downloaded'), findsOneWidget);
+    expect(find.text('On device'), findsOneWidget);
+
+    // Tapping 'All' opens the detail screen with the empty pane.
+    await tester.tap(find.text('All'));
+    await tester.pumpAndSettle();
+    expect(find.text('No music yet'), findsOneWidget);
+
+    // Detail app bar keeps the standard filter control separate from Sort.
+    expect(find.byTooltip('Filter'), findsOneWidget);
+    expect(find.byTooltip('Sort'), findsOneWidget);
+
+    // Pop back to root, then back to Search.
+    await tester.tap(find.byIcon(Icons.arrow_back_ios_new_rounded));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Search').last);
     await tester.pumpAndSettle();
-    expect(find.byType(TextField), findsOneWidget);
-
-
+    expect(find.byKey(const Key('search_launcher')), findsOneWidget);
   });
 
   testWidgets('Playing a song shows the mini player and opens Now Playing',
@@ -70,8 +84,6 @@ void main() {
     await controller.stopAndClear();
     await tester.pumpAndSettle();
     expect(find.text('Song a'), findsNothing);
-
-
   });
 
   testWidgets('Auto-advances to next track as engine completes',
@@ -92,7 +104,68 @@ void main() {
     await tester.pumpAndSettle();
     expect(controller.currentSong!.id, 'b');
     expect(find.text('Song b'), findsWidgets);
+  });
 
+  testWidgets('Sleep timer starts and shows in Now Playing',
+      (tester) async {
+    final controller = MusicPlayerController(
+      engine: FakeAudioEngine(),
+      clock: () => DateTime(2025, 1, 1, 12, 0, 0),
+    );
+    await tester.pumpWidget(_app(controller));
+    await tester.pumpAndSettle();
 
+    await controller.playLocal(_song('a', path: '/tmp/a.m4a'));
+    await tester.pumpAndSettle();
+
+    // Start a 15 minute sleep timer via the controller.
+    controller.startSleepTimer(const Duration(minutes: 15));
+    expect(controller.hasSleepTimer, isTrue);
+    expect(controller.sleepTimerEndsAt, DateTime(2025, 1, 1, 12, 15, 0));
+
+    // The remaining duration reflects the 15 minutes.
+    final remaining = controller.sleepTimerRemaining;
+    expect(remaining, isNotNull);
+    expect(remaining!.inMinutes, 15);
+
+    // Cancel restores the state.
+    controller.cancelSleepTimer();
+    expect(controller.hasSleepTimer, isFalse);
+    expect(controller.sleepTimerRemaining, isNull);
+
+    // The sheet in Now Playing exposes presets and a custom-minutes option.
+    await tester.tap(find.text('Song a'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.bedtime_rounded).last);
+    await tester.pumpAndSettle();
+    expect(find.text('Custom minutes…'), findsOneWidget);
+
+    await tester.tap(find.text('Custom minutes…'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '25');
+    await tester.tap(find.text('Start'));
+    await tester.pumpAndSettle();
+    expect(controller.hasSleepTimer, isTrue);
+    expect(controller.sleepTimerEndsAt, DateTime(2025, 1, 1, 12, 25, 0));
+
+    await controller.stopAndClear();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('playSongList sets context name for playback',
+      (tester) async {
+    final engine = FakeAudioEngine();
+    final controller = MusicPlayerController(engine: engine);
+    expect(controller.playbackContextName, isNull);
+
+    await controller.playSongList(
+      [_song('a', path: '/tmp/a.m4a')],
+      contextName: 'Workout',
+    );
+    await tester.pumpAndSettle();
+    expect(controller.playbackContextName, 'Workout');
+
+    await controller.stopAndClear();
+    expect(controller.playbackContextName, isNull);
   });
 }

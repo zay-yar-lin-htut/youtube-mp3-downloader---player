@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../models/song.dart';
 
 /// Playback entry — wraps a [Song] and remembers its media source.
-enum PlaybackSource { local, preview }
+enum PlaybackSource { local, preview, device }
 
 @immutable
 class QueueEntry {
@@ -97,28 +97,21 @@ class PlayerQueue extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Appends to the canonical list and places it right after the current track
-  /// in the active (played) order.
-  void addToQueue(QueueEntry entry) {
-    if (_entries.any((e) => e.song.id == entry.song.id)) {
-      return;
+  /// Replaces the song details (title/localPath) of every entry with [id].
+  /// Used when a downloaded song is renamed on disk; playback continues
+  /// uninterrupted because the id never changes.
+  void updateSong(Song updated) {
+    for (var i = 0; i < _entries.length; i++) {
+      if (_entries[i].song.id == updated.id) {
+        _entries[i] = QueueEntry(song: updated, source: _entries[i].source);
+      }
     }
-    _entries.add(entry);
-    _insertInActiveAfterCursor(entry);
+    for (var i = 0; i < _active.length; i++) {
+      if (_active[i].song.id == updated.id) {
+        _active[i] = QueueEntry(song: updated, source: _active[i].source);
+      }
+    }
     notifyListeners();
-  }
-
-  void _insertInActiveAfterCursor(QueueEntry entry) {
-    if (_active.isEmpty) {
-      _active.add(entry);
-      return;
-    }
-    if (!_shuffleEnabled) {
-      _active.add(entry);
-      return;
-    }
-    final insertPoint = _cursor + 1;
-    _active.insert(insertPoint.clamp(0, _active.length), entry);
   }
 
   /// Removes every occurrence of [songId] (used by delete flows).
@@ -136,41 +129,11 @@ class PlayerQueue extends ChangeNotifier {
     return wasCurrent;
   }
 
-  /// Removes the entry at the given *active-order* index (queue sheet UI).
-  QueueEntry? removeAtActiveIndex(int index) {
-    if (index < 0 || index >= _active.length) {
-      return null;
-    }
-    final removed = _active.removeAt(index);
-    _entries.removeWhere((e) => e.song.id == removed.song.id);
-    if (_active.isEmpty) {
-      _cursor = -1;
-    } else if (_cursor > index) {
-      _cursor -= 1;
-    } else if (_cursor == index) {
-      _cursor = _cursor.clamp(0, _active.length - 1);
-    }
-    notifyListeners();
-    return removed;
-  }
-
   /// Empties the queue entirely.
   void removeAll() {
     _entries.clear();
     _active.clear();
     _cursor = -1;
-    notifyListeners();
-  }
-
-  /// Drops everything after the current track from the playback order.
-  void clearUpcoming() {
-    if (_active.isEmpty || _cursor < 0 || _cursor >= _active.length - 1) {
-      notifyListeners();
-      return;
-    }
-    final droppedIds = _active.sublist(_cursor + 1).map((e) => e.song.id).toSet();
-    _active.removeRange(_cursor + 1, _active.length);
-    _entries.removeWhere((e) => droppedIds.contains(e.song.id));
     notifyListeners();
   }
 

@@ -15,6 +15,23 @@ function parseVersionTag(tag) {
   };
 }
 
+function parseVersionFromApkName(name) {
+  if (typeof name !== "string") return null;
+  const withoutExt = name.replace(/\.apk$/i, "").trim();
+  const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(withoutExt);
+  if (!match) return null;
+  return {
+    version: `${match[1]}.${match[2]}.${match[3]}`,
+    versionCode: Number(`${match[1]}${match[2]}${match[3]}`),
+  };
+}
+
+function resolveVersion(release, asset) {
+  const fromName = asset ? parseVersionFromApkName(asset.name) : null;
+  if (fromName) return fromName;
+  return parseVersionTag(release && release.tag_name);
+}
+
 function findApkAsset(release) {
   if (!release || !Array.isArray(release.assets)) return null;
   const usable = (asset) =>
@@ -22,16 +39,26 @@ function findApkAsset(release) {
     typeof asset.name === "string" &&
     typeof asset.browser_download_url === "string" &&
     asset.browser_download_url.length > 0;
-  const exact = release.assets.find((a) => usable(a) && a.name === "app-release.apk");
-  if (exact) return exact;
+  const apks = release.assets.filter(
+    (a) => usable(a) && a.name.toLowerCase().endsWith(".apk"),
+  );
+  if (apks.length === 0) return null;
   return (
-    release.assets.find(
-      (a) => usable(a) && a.name.toLowerCase().endsWith(".apk"),
-    ) || null
+    apks.find((a) => parseVersionFromApkName(a.name)) ||
+    apks.find((a) => a.name === "app-release.apk") ||
+    apks[0]
   );
 }
 
-async function fetchLatestRelease(owner, repository, token, fetchImpl) {
+function selectRelease(releases) {
+  if (!Array.isArray(releases)) return null;
+  const published = releases.filter((r) => r && r.draft !== true);
+  const stable = published.find((r) => !r.prerelease && findApkAsset(r));
+  if (stable) return stable;
+  return published.find((r) => findApkAsset(r)) || null;
+}
+
+async function fetchReleases(owner, repository, token, fetchImpl) {
   const impl = fetchImpl || fetch;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -39,7 +66,7 @@ async function fetchLatestRelease(owner, repository, token, fetchImpl) {
     const headers = { Accept: GITHUB_ACCEPT, "User-Agent": USER_AGENT };
     if (token) headers.Authorization = `Bearer ${token}`;
     const response = await impl(
-      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/releases/latest`,
+      `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/releases?per_page=100`,
       { headers, signal: controller.signal },
     );
     if (!response.ok) {
@@ -70,9 +97,9 @@ async function getVersionPayload(opts = {}) {
     return { statusCode: 200, body: cached.data };
   }
 
-  let release;
+  let releases;
   try {
-    release = await fetchLatestRelease(owner, repository, env.GITHUB_TOKEN, fetchImpl);
+    releases = await fetchReleases(owner, repository, env.GITHUB_TOKEN, fetchImpl);
   } catch (err) {
     if (err && err.statusCode === 404) {
       return { statusCode: 404, body: { error: "No released version found" } };
@@ -80,14 +107,18 @@ async function getVersionPayload(opts = {}) {
     return { statusCode: 502, body: { error: "Unable to retrieve latest release" } };
   }
 
-  const parsed = parseVersionTag(release.tag_name);
-  if (!parsed) {
-    return { statusCode: 500, body: { error: "Latest release tag is invalid" } };
+  const release = selectRelease(releases);
+  if (!release) {
+    if (!Array.isArray(releases) || releases.length === 0) {
+      return { statusCode: 404, body: { error: "No released version found" } };
+    }
+    return { statusCode: 500, body: { error: "No APK found in latest release" } };
   }
 
   const asset = findApkAsset(release);
-  if (!asset) {
-    return { statusCode: 500, body: { error: "No APK found in latest release" } };
+  const parsed = resolveVersion(release, asset);
+  if (!parsed) {
+    return { statusCode: 500, body: { error: "Latest release version is invalid" } };
   }
 
   const data = {
@@ -137,6 +168,9 @@ async function handler(req, res, opts) {
 module.exports = handler;
 module.exports.handler = handler;
 module.exports.parseVersionTag = parseVersionTag;
+module.exports.parseVersionFromApkName = parseVersionFromApkName;
+module.exports.resolveVersion = resolveVersion;
 module.exports.findApkAsset = findApkAsset;
-module.exports.fetchLatestRelease = fetchLatestRelease;
+module.exports.selectRelease = selectRelease;
+module.exports.fetchReleases = fetchReleases;
 module.exports.getVersionPayload = getVersionPayload;

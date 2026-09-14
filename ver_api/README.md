@@ -23,28 +23,29 @@ GitHub Releases
 Latest APK
 ```
 
-When you publish a GitHub Release (with the right tag name and an APK asset),
-every FreeVibe installation that checks `/api/version` automatically sees the
-new version. No change to this API project is needed.
+When you publish a GitHub Release that has an APK asset, every FreeVibe
+installation that checks `/api/version` automatically sees the new version. No
+change to this API project is needed.
 
 ## API endpoint
 
 `GET /api/version`
 
-Example response:
+Example response (real current release):
 
 ```json
 {
-  "version": "1.4.0",
-  "versionCode": 8,
-  "downloadUrl": "https://github.com/OWNER/REPOSITORY/releases/download/v1.4.0+8/app-release.apk",
+  "version": "2.1.1",
+  "versionCode": 211,
+  "downloadUrl": "https://github.com/zay-yar-lin-htut/youtube-mp3-downloader---player/releases/download/yt-mp3/v2.1.1.apk",
   "forceUpdate": false
 }
 ```
 
-- `version` — the human-readable version (from the release tag).
-- `versionCode` — the Android build/version code (from the release tag).
-- `downloadUrl` — direct link to the APK asset on GitHub Releases.
+- `version` — the human-readable version (`2.1.1`).
+- `versionCode` — the Android build/version code (`211`).
+- `downloadUrl` — the real `browser_download_url` of the APK asset on GitHub
+  Releases, taken from GitHub's API. It is never constructed manually.
 - `forceUpdate` — `true` or `false` as a real boolean (from `FORCE_UPDATE`).
 
 Non-GET methods (for example `POST /api/version`) return `405 Method not allowed`.
@@ -53,57 +54,76 @@ CORS is enabled so the Flutter Android app can call the API directly.
 
 ## GitHub Release requirements
 
-For the API to work, the latest GitHub Release must have:
-
-1. A tag in the format `vMAJOR.MINOR.PATCH+VERSION_CODE`, for example `v1.4.0+8`.
-2. An APK asset uploaded to that release.
-
-### Tag format
-
-The tag is the Flutter app version with the version code:
+For the API to work, the repository must have published releases that contain an
+APK asset. The release tag does **not** have to be a version. For example, the
+current release uses:
 
 ```text
-v1.4.0+8
+Release tag:   yt-mp3
+APK asset:     v2.1.1.apk
 ```
 
-is parsed into:
+### How the version is detected
+
+The API lists the published releases and picks the newest stable (non-draft)
+release that has an APK asset. The app version is then parsed from the **APK
+asset filename**, not from the release tag:
 
 ```text
-version     = 1.4.0
-versionCode = 8
+v2.1.1.apk  →  version = 2.1.1
 ```
 
-A leading `v` is optional but recommended:
+The Android `versionCode` is the three numbers concatenated:
 
 ```text
-v1.0.0+1
-v1.2.3+5
-v2.0.0+17
+2.1.1  →  211
+2.2.0  →  220
+3.0.0  →  300
 ```
 
-If the latest release tag does not contain a valid version code, the API returns
-an error instead of guessing.
+Future releases just upload new assets such as `v2.1.2.apk`, `v2.2.0.apk` or
+`v3.0.0.apk`. The tag can stay `yt-mp3`.
 
-### APK asset
+If the release tag happens to use the `v1.4.0+8` convention (where `+8` is the
+version code) and the APK filename has no version, the API falls back to parsing
+the tag. If neither source has a valid version, the API returns an error instead
+of guessing.
 
-The API looks for `app-release.apk` first. If that exact name is missing, it
-falls back to the first asset whose name ends with `.apk`. If there is no APK
-asset at all, the API returns an error. It never manufactures a fake download
-URL.
+### APK asset selection
+
+Inside the chosen release, the API inspects `assets[]`:
+
+1. Prefers an asset named like a version, e.g. `v2.1.1.apk`.
+2. Otherwise prefers the exact name `app-release.apk`.
+3. Otherwise picks the first asset ending in `.apk`.
+
+If there is no `.apk` asset at all, the API returns an error. It never
+manufactures a fake download URL — it always uses GitHub's
+`browser_download_url`.
 
 ### Releases vs drafts
 
-The API uses GitHub's official "latest release" behavior. It only returns
-published, non-draft stable releases.
+The API lists `GET /repos/{owner}/{repo}/releases` (newest first), skips drafts,
+prefers non-prerelease releases, and returns the newest published release that
+has an APK. If the repository is private, set `GITHUB_TOKEN` so the API can see
+the releases.
 
 ## Environment variables
 
 | Variable | Required | Description |
 | -------- | -------- | ----------- |
 | `GITHUB_OWNER` | Yes | GitHub username or organization that owns the repository. |
-| `GITHUB_REPOSITORY` | Yes | Name of the repository, for example `FreeVibe`. |
+| `GITHUB_REPOSITORY` | Yes | Name of the repository. |
 | `FORCE_UPDATE` | Yes | Set to `true` to force all users to update, `false` to let them skip. Defaults to `false` if unset. |
 | `GITHUB_TOKEN` | No | Only needed when the repository is private. |
+
+Current expected values (see `.env.example`):
+
+```text
+GITHUB_OWNER=zay-yar-lin-htut
+GITHUB_REPOSITORY=youtube-mp3-downloader---player
+FORCE_UPDATE=false
+```
 
 A template is provided in `.env.example` — copy it to `.env` for local use.
 
@@ -121,8 +141,8 @@ npm install
 Set the environment variables (PowerShell example):
 
 ```powershell
-$env:GITHUB_OWNER = "YOUR_GITHUB_USERNAME"
-$env:GITHUB_REPOSITORY = "FreeVibe"
+$env:GITHUB_OWNER = "zay-yar-lin-htut"
+$env:GITHUB_REPOSITORY = "youtube-mp3-downloader---player"
 $env:FORCE_UPDATE = "false"
 ```
 
@@ -151,16 +171,30 @@ curl -X POST http://localhost:3000/api/version
 npm test
 ```
 
-The tests cover version tag parsing, valid releases, invalid tags, missing APK
-assets, GitHub API failures, caching, CORS, and HTTP method handling.
+The tests cover APK asset detection, version parsing from asset filenames,
+release selection, invalid/missing versions, missing APK assets, GitHub API
+failures, caching, CORS, and HTTP method handling.
 
 ## Deploy to Vercel
+
+Exactly one file keeps the project in **Other** mode so it deploys as
+Serverless Functions, not a Node server — `vercel.json`:
+
+```json
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null
+}
+```
 
 1. Push this folder to a GitHub repository.
 2. Go to https://vercel.com and click **Add New Project**.
 3. Import the GitHub repository. If the folder lives inside a monorepo, set the
    **Root Directory** to this folder (`ver_api`).
-4. Leave the **Build Command** empty and the **Framework Preset** set to **Other**.
+4. Confirm the settings:
+   - **Framework Preset:** Other (`framework: null` from `vercel.json`)
+   - **Build Command:** empty
+   - **Output Directory:** empty
 5. Add the environment variables above:
    - `GITHUB_OWNER`
    - `GITHUB_REPOSITORY`
@@ -169,12 +203,12 @@ assets, GitHub API failures, caching, CORS, and HTTP method handling.
 6. Click **Deploy**. Vercel builds `api/version.js` as a Serverless Function.
 
 > **Important:** this project must use Vercel Serverless Functions, not a Node
-> server. Do **not** add a `start` script to `package.json`. Vercel treats a
-> project that has a `start` script as a long-running Node server and will run
-> `npm start` during the build, which hangs the deployment. This project uses
-> `npm run dev` only for local testing. If your Vercel settings still show a
-> build command of `npm run start`, clear it in **Project → Settings → General →
-> Build Command**.
+> server. Do **not** add a `start` script to `package.json`, and never put
+> `server.js`, `index.js` or `app.js` at the project root — Vercel would treat
+> them as a Node server entrypoint. This project runs locally with
+> `npm run dev` (`dev-server.js`), which is for local development only. If your
+> Vercel settings still show a build command of `npm run start`, clear it in
+> **Project → Settings → General → Build Command**.
 
 You get a URL like:
 
@@ -188,13 +222,16 @@ Open it in a browser — you should see the JSON response.
 
 No changes are needed in this project. Just:
 
-1. Bump the version in the Flutter app: `version: 1.4.0+8` in `pubspec.yaml`.
+1. Bump the version in the Flutter app: `version: 2.1.1` in `pubspec.yaml`.
 2. Build the APK: `flutter build apk --release`.
-3. On GitHub, create a new release with tag `v1.4.0+8`.
-4. Upload `app-release.apk` to the release.
+3. On GitHub, create a new release. The tag can stay the same (for example
+   `yt-mp3`) — the tag is **not** used as the app version.
+4. Upload the APK with the version in its filename, for example `v2.1.1.apk`.
 5. Publish the release.
 
-The API automatically discovers the new tag and APK on the next check.
+The API automatically finds the newest published release that has an `.apk`
+asset, parses the version from the asset filename, and returns the real
+`browser_download_url` on the next check.
 
 ## Error responses
 
@@ -205,10 +242,10 @@ The API always returns JSON, never an HTML error page:
 | Successful response | 200 | version information |
 | Wrong HTTP method | 405 | `{"error": "Method not allowed"}` |
 | Repository not configured (missing env vars) | 500 | `{"error": "Server not configured"}` |
-| Invalid release tag | 500 | `{"error": "Latest release tag is invalid"}` |
-| No APK in the release | 500 | `{"error": "No APK found in latest release"}` |
+| No downloadable version (invalid asset/tag version) | 500 | `{"error": "Latest release version is invalid"}` |
+| No APK in any release | 500 | `{"error": "No APK found in latest release"}` |
 | No released version yet | 404 | `{"error": "No released version found"}` |
-| GitHub unreachable or API error | 502 | `{"error": "Unable to retrieve latest release"}` |
+| GitHub unreachable, rate-limited, or API error | 502 | `{"error": "Unable to retrieve latest release"}` |
 
 ## Project structure
 
@@ -219,9 +256,10 @@ freevibe-update-api/
 ├── dev-server.js        # local-only test server (npm run dev)
 ├── test/
 │   ├── api.test.js      # API behavior tests
-│   └── version-parser.test.js  # tag parsing tests
+│   └── version-parser.test.js  # version parsing tests
 ├── .env.example         # environment variable template
 ├── .gitignore
 ├── package.json
+├── vercel.json          # forces the "Other" preset (Serverless Functions)
 └── README.md
 ```

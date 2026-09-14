@@ -11,6 +11,27 @@ String formatDuration(Duration d) {
   return '$mm:$ss';
 }
 
+/// Parses a "m:ss", "mm:ss" or "h:mm:ss" clock string into a [Duration].
+/// Returns [Duration.zero] when the string cannot be parsed.
+Duration parseClockDuration(String value) {
+  final parts = value.trim().split(':');
+  if (parts.length < 2 || parts.length > 3) {
+    return Duration.zero;
+  }
+  final numbers = <int>[];
+  for (final part in parts) {
+    final n = int.tryParse(part.trim());
+    if (n == null || n < 0) {
+      return Duration.zero;
+    }
+    numbers.add(n);
+  }
+  final seconds = numbers.last;
+  final minutes = numbers[numbers.length - 2];
+  final hours = numbers.length == 3 ? numbers.first : 0;
+  return Duration(hours: hours, minutes: minutes, seconds: seconds);
+}
+
 String formatBytes(int bytes) {
   if (bytes < 1024) {
     return '$bytes B';

@@ -110,6 +110,13 @@ class _SearchOverlayState extends State<SearchOverlay> {
     _suggestions.requestSuggestions(value, _onSuggestionsReady);
   }
 
+  /// Clears the field and resets the overlay's search state back to the
+  /// empty-field view (recents / hints). Never triggers a search.
+  void _onClear() {
+    _controller.clear();
+    _onTextChanged('');
+  }
+
   void _onSuggestionsReady(List<String> suggestions) {
     if (_disposed || !mounted) {
       return;
@@ -203,6 +210,7 @@ class _SearchOverlayState extends State<SearchOverlay> {
                           onChanged: _onTextChanged,
                           onSubmitted: (_) => _submit(),
                           onSearchPressed: () => _submit(),
+                          onClear: _onClear,
                         ),
                       ),
                     ],

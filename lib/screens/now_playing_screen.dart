@@ -312,6 +312,12 @@ class _Controls extends StatelessWidget {
           onPressed: controller.previous,
           icon: const Icon(Icons.skip_previous_rounded, color: AppColors.textPrimary),
         ),
+        IconButton(
+          iconSize: 30,
+          tooltip: 'Back 10 seconds',
+          onPressed: controller.seekBack10,
+          icon: const Icon(Icons.replay_10_rounded, color: AppColors.textPrimary),
+        ),
         ValueListenableBuilder(
           valueListenable: controller.engine.stage,
           builder: (context, stage, _) {
@@ -332,6 +338,12 @@ class _Controls extends StatelessWidget {
               ),
             );
           },
+        ),
+        IconButton(
+          iconSize: 30,
+          tooltip: 'Forward 10 seconds',
+          onPressed: controller.seekForward10,
+          icon: const Icon(Icons.forward_10_rounded, color: AppColors.textPrimary),
         ),
         IconButton(
           iconSize: 34,

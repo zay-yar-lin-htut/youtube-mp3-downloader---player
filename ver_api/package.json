@@ -1,0 +1,14 @@
+{
+  "name": "freevibe-update-api",
+  "version": "1.0.0",
+  "description": "Version-check API for the FreeVibe Flutter app, driven by GitHub Releases and deployed on Vercel.",
+  "main": "api/version.js",
+  "scripts": {
+    "start": "node api/version.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18.x"
+  },
+  "license": "MIT"
+}

@@ -281,6 +281,141 @@ void main() {
     });
   });
 
+  group('SearchScreen clear (X) button', () {
+    Finder searchButton() => find.descendant(
+          of: find.byKey(const Key('search_overlay_field')),
+          matching: find.byKey(const Key('search_action')),
+        );
+
+    Finder clearButton() => find.descendant(
+          of: find.byKey(const Key('search_overlay_field')),
+          matching: find.byKey(const Key('search_clear')),
+        );
+
+    TextEditingController fieldController(WidgetTester tester) => tester
+        .widget<TextField>(
+          find.descendant(
+            of: find.byKey(const Key('search_overlay_field')),
+            matching: find.byType(TextField),
+          ),
+        )
+        .controller!;
+
+    testWidgets('empty field shows the search icon, not the clear icon', (
+      tester,
+    ) async {
+      await pumpSearch(tester, _FakeYouTubeService());
+      await openSearchOverlay(tester);
+
+      expect(searchButton(), findsOneWidget);
+      expect(clearButton(), findsNothing);
+    });
+
+    testWidgets('typing text replaces the search icon with the clear icon', (
+      tester,
+    ) async {
+      await pumpSearch(tester, _FakeYouTubeService());
+      await openSearchOverlay(tester);
+
+      await tester.enterText(
+        find.byKey(const Key('search_overlay_field')),
+        'rick astley',
+      );
+      await tester.pump();
+
+      expect(clearButton(), findsOneWidget);
+      expect(searchButton(), findsNothing);
+    });
+
+    testWidgets(
+      'tapping the clear icon empties the field, restores the search icon, '
+      'and does not trigger a search',
+      (tester) async {
+        final service = _FakeYouTubeService(page: _bigPage(3));
+        await pumpSearch(tester, service);
+        await openSearchOverlay(tester);
+
+        await tester.enterText(
+          find.byKey(const Key('search_overlay_field')),
+          'rick astley',
+        );
+        await tester.pump();
+        expect(clearButton(), findsOneWidget);
+
+        await tester.tap(clearButton());
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 20));
+
+        // Field cleared, lens back, overlay still open, nothing searched.
+        expect(fieldController(tester).text, isEmpty);
+        expect(searchButton(), findsOneWidget);
+        expect(clearButton(), findsNothing);
+        expect(find.byKey(const Key('search_overlay_field')), findsOneWidget);
+        expect(service.searchCalls, 0);
+        expect(service.getVideoCalls, 0);
+        expect(player.currentSong, isNull);
+      },
+    );
+
+    testWidgets(
+      'tapping the clear icon cancels an in-flight suggestion request',
+      (tester) async {
+        final service = _FakeYouTubeService(
+          suggestionsGate: Completer<void>(),
+        );
+        await pumpSearch(tester, service);
+        await openSearchOverlay(tester);
+
+        await tester.enterText(
+          find.byKey(const Key('search_overlay_field')),
+          'coldplay',
+        );
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(find.text('Searching…'), findsOneWidget);
+
+        await tester.tap(clearButton());
+        await tester.pump(const Duration(milliseconds: 400));
+
+        // Pending suggestions resolve only to an already-cancelled request:
+        // the field stays empty and the busy indicator never reappears.
+        expect(find.text('Searching…'), findsNothing);
+        service.suggestionsGate!.complete();
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(find.text('Searching…'), findsNothing);
+        expect(fieldController(tester).text, isEmpty);
+      },
+    );
+
+    testWidgets('searching still works after using the clear icon', (
+      tester,
+    ) async {
+      final service = _FakeYouTubeService(page: _bigPage(3));
+      await pumpSearch(tester, service);
+
+      // Type, clear, then submit a fresh query: results must still load.
+      await openSearchOverlay(tester);
+      await tester.enterText(
+        find.byKey(const Key('search_overlay_field')),
+        'ignore me',
+      );
+      await tester.pump();
+      await tester.tap(clearButton());
+      await tester.pump();
+
+      await tester.enterText(
+        find.byKey(const Key('search_overlay_field')),
+        'coldplay',
+      );
+      await tester.testTextInput.receiveAction(TextInputAction.search);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      await tester.pump(const Duration(milliseconds: 20));
+
+      expect(service.searchCalls, 1);
+      expect(find.text('Song 0'), findsOneWidget);
+    });
+  });
+
   group('SearchScreen download messaging', () {
     testWidgets('rate limit shows a friendly message, not a generic failure', (
       tester,

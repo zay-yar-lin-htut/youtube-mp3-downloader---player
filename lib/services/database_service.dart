@@ -172,6 +172,24 @@ class DatabaseService implements LibraryStorage {
     return result.first['value'] as String?;
   }
 
+  /// Removes a setting row (used to clear stale resume points). Read-only in
+  /// spirit: it never touches schema or other tables.
+  Future<void> deleteSetting(String key) async {
+    final db = await instance.database;
+    await db.delete('app_settings', where: 'key = ?', whereArgs: [key]);
+  }
+
+  /// All key/value rows (used to warm in-memory resume positions at startup).
+  Future<Map<String, String>> getAllSettings() async {
+    final db = await instance.database;
+    final rows = await db.query('app_settings');
+    return <String, String>{
+      for (final row in rows)
+        if (row['key'] is String && row['value'] is String)
+          row['key'] as String: row['value'] as String,
+    };
+  }
+
   @override
   Future<void> insertSong(Song song) async {
     final db = await instance.database;

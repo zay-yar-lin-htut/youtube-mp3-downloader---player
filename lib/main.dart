@@ -1,24 +1,82 @@
+import 'dart:io';
+
+import 'package:audio_service/audio_service.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+
+import 'player/media_session_handler.dart';
 import 'player/music_player_controller.dart';
-import 'services/youtube_service.dart';
-import 'services/database_service.dart';
-import 'screens/search_screen.dart';
-import 'screens/playlist_screen.dart';
 import 'screens/download_screen.dart';
 import 'screens/now_playing_screen.dart';
-import 'widgets/mini_player.dart';
+import 'screens/playlist_screen.dart';
+import 'screens/search_screen.dart';
+import 'services/database_service.dart';
+import 'services/resume_store.dart';
+import 'services/update_service.dart';
+import 'services/youtube_service.dart';
 import 'theme/app_theme.dart';
+import 'widgets/mini_player.dart';
 
-void main() {
-  runApp(const MyApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  if (!kIsWeb && Platform.isAndroid) {
+    try {
+      await AudioService.init(
+        builder: () => MediaSessionHandler.instance,
+        config: const AudioServiceConfig(
+          androidNotificationChannelId:
+              'com.example.yt_local_music.channel.audio',
+          androidNotificationChannelName: 'Playback',
+          androidNotificationChannelDescription:
+              'Media notification and playback controls',
+          androidNotificationIcon: 'mipmap/launcher_icon',
+          androidNotificationClickStartsActivity: true,
+          fastForwardInterval: Duration(seconds: 10),
+          rewindInterval: Duration(seconds: 10),
+        ),
+      );
+    } catch (e) {
+      debugPrint('[main] media session unavailable: $e');
+    }
+  }
+
+  // The controller is app-scoped (created here, never by the widget layer) so
+  // it, and the media session mirroring it, survive navigation and activity
+  // teardown while playback lives in the foreground service.
+  final youtubeService = YouTubeService();
+  final controller = MusicPlayerController(
+    streamUrlResolver: (songId) => youtubeService.getAudioStreamUrl(songId),
+    resumeStore: DatabaseResumeStore(),
+  );
+  MediaSessionHandler.instance.attach(controller);
+
+  // App-scoped update engine. FreeVibe is offline-first: no update check runs
+  // at startup. The engine gates Internet-dependent actions via
+  // `hasInternetConnection` and lazily checks for updates after an online
+  // search (failures are silently ignored, search never waits on it).
+  final updateService = UpdateService();
+
+  runApp(MyApp(
+    controller: controller,
+    youtubeService: youtubeService,
+    updateService: updateService,
+  ));
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key, this.controller});
+  const MyApp({super.key, this.controller, this.youtubeService, this.updateService});
 
-  /// Injectable for widget tests. When null, [HomeScreen] builds its own
+  /// Injectable for widget tests. When null, [HomeScreen] builds/owns its own
   /// controller backed by the real AudioService.
   final MusicPlayerController? controller;
+
+  /// Injectable for widget tests. When null, [HomeScreen] builds/owns its own.
+  final YouTubeService? youtubeService;
+
+  /// Injectable for widget tests / app startup. When null the update flow is
+  /// skipped entirely (tests stay plugin-free).
+  final UpdateService? updateService;
 
   @override
   Widget build(BuildContext context) {
@@ -26,15 +84,28 @@ class MyApp extends StatelessWidget {
       title: 'YT Local Music',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.dark,
-      home: HomeScreen(controller: controller),
+      home: HomeScreen(
+        controller: controller,
+        youtubeService: youtubeService,
+        updateService: updateService,
+      ),
     );
   }
 }
 
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, this.controller});
+  const HomeScreen({
+    super.key,
+    this.controller,
+    this.youtubeService,
+    this.updateService,
+  });
 
   final MusicPlayerController? controller;
+
+  final YouTubeService? youtubeService;
+
+  final UpdateService? updateService;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -49,11 +120,12 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _youtubeService = YouTubeService();
+    _youtubeService = widget.youtubeService ?? YouTubeService();
     _playerController =
         widget.controller ?? MusicPlayerController(
               streamUrlResolver: (songId) =>
                   _youtubeService.getAudioStreamUrl(songId),
+              resumeStore: DatabaseResumeStore(),
             );
     _playerController.init();
     _playerController.addListener(_onPlayerChanged);
@@ -70,6 +142,9 @@ class _HomeScreenState extends State<HomeScreen> {
         orElse: () => RepeatStyle.off,
       );
       _playerController.restoreSettings(shuffle: shuffle, repeat: repeat);
+      // Warm the in-memory resume cache so "Continue · X:XX" hints are
+      // available right away after a fresh app start.
+      _playerController.warmResumePositions();
     } catch (e) {
       debugPrint('[HomeScreen] could not restore settings: $e');
     }
@@ -98,8 +173,14 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _playerController.removeListener(_onPlayerChanged);
-    _playerController.dispose();
-    _youtubeService.dispose();
+    // Only dispose what this widget created; app-scoped instances injected
+    // from main() (which back the media session) live for the whole process.
+    if (widget.controller == null) {
+      _playerController.dispose();
+    }
+    if (widget.youtubeService == null) {
+      _youtubeService.dispose();
+    }
     super.dispose();
   }
 
@@ -143,6 +224,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   SearchScreen(
                     youtubeService: _youtubeService,
                     playerController: _playerController,
+                    updateService: widget.updateService,
                   ),
                   const DownloadScreen(),
                   PlaylistScreen(playerController: _playerController),

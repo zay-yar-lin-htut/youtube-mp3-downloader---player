@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../models/song.dart';
 import '../player/music_player_controller.dart';
@@ -5,6 +7,7 @@ import '../services/youtube_service.dart';
 import '../services/database_service.dart';
 import '../services/download_manager.dart';
 import '../services/search_suggestion_service.dart';
+import '../services/update_service.dart';
 import '../services/youtube_url.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_spacing.dart';
@@ -12,16 +15,25 @@ import '../theme/app_typography.dart';
 import '../widgets/song_tile.dart';
 import '../widgets/song_info_dialog.dart';
 import '../widgets/search_field.dart';
+import '../widgets/network_required_dialog.dart';
 import 'search_overlay.dart';
+import 'update_dialog.dart';
 
 class SearchScreen extends StatefulWidget {
   final YouTubeService youtubeService;
   final MusicPlayerController playerController;
 
+  /// Optional update engine. When provided it both gates Internet-dependent
+  /// actions (search/preview/download) via [UpdateService.hasInternetConnection]
+  /// and lazily triggers the app-update check after a successful online
+  /// search. When null the network gate is skipped.
+  final UpdateService? updateService;
+
   const SearchScreen({
     super.key,
     required this.youtubeService,
     required this.playerController,
+    this.updateService,
   });
 
   @override
@@ -86,6 +98,12 @@ class _SearchScreenState extends State<SearchScreen> {
     if (query.isEmpty) {
       return;
     }
+    final online = await _ensureOnlineForAction(
+      networkRequiredSearchMessage,
+    );
+    if (!online || _disposed || !mounted) {
+      return;
+    }
     _controller.text = query;
     _controller.selection = TextSelection.collapsed(offset: query.length);
 
@@ -141,6 +159,35 @@ class _SearchScreenState extends State<SearchScreen> {
         });
       }
     }
+    unawaited(_maybeCheckForUpdate());
+  }
+
+  /// Runs the app-update check in the background after an online action.
+  /// Search results must never wait for the update API, and every update
+  /// failure (offline, 4xx/5xx, timeout, malformed payload) is silently
+  /// ignored by the update engine itself.
+  Future<void> _maybeCheckForUpdate() {
+    final service = widget.updateService;
+    if (service == null) {
+      return Future.value();
+    }
+    return runUpdateFlowIfNeeded(context, service: service);
+  }
+
+  /// Gates an Internet-dependent action. When the device is offline a styled
+  /// "No Internet Connection" dialog is shown (operation-specific [message])
+  /// and the action is aborted. Returns true when online (or when no update
+  /// engine is configured, e.g. in tests that inject none).
+  Future<bool> _ensureOnlineForAction(String message) async {
+    final service = widget.updateService;
+    if (service == null) {
+      return true;
+    }
+    final online = await service.hasInternetConnection();
+    if (!online && mounted) {
+      await showNetworkRequiredDialog(context, message: message);
+    }
+    return online;
   }
 
   Future<void> _loadMore() async {
@@ -180,11 +227,19 @@ class _SearchScreenState extends State<SearchScreen> {
     }
   }
 
-  void _previewSong(Song song) {
+  Future<void> _previewSong(Song song) async {
+    final online = await _ensureOnlineForAction(networkRequiredPreviewMessage);
+    if (!online || _disposed || !mounted) {
+      return;
+    }
     widget.playerController.playPreview(song);
   }
 
   Future<void> _downloadSong(Song song) async {
+    final online = await _ensureOnlineForAction(networkRequiredDownloadMessage);
+    if (!online || _disposed || !mounted) {
+      return;
+    }
     debugPrint('[Search] Download requested id=${song.id} title=${song.title}');
     await DownloadManager.instance
         .updateProgress(song.id, song.title, null);
@@ -318,6 +373,9 @@ class _SearchScreenState extends State<SearchScreen> {
                 children: [
                   IconButton(
                     tooltip: 'More',
+                    visualDensity: kSongActionDensity,
+                    padding: kSongActionPadding,
+                    constraints: kSongActionConstraints,
                     icon: const Icon(
                       Icons.more_vert,
                       color: AppColors.textSecondary,
@@ -327,6 +385,7 @@ class _SearchScreenState extends State<SearchScreen> {
                   _PreviewButton(
                     song: song,
                     controller: widget.playerController,
+                    onPreview: () => _previewSong(song),
                   ),
                   _DownloadButton(song: song, onDownload: _downloadSong),
                 ],
@@ -389,10 +448,15 @@ class _PreviewButton extends StatelessWidget {
   const _PreviewButton({
     required this.song,
     required this.controller,
+    required this.onPreview,
   });
 
   final Song song;
   final MusicPlayerController controller;
+
+  /// Runs an Internet-gated preview start (a current-track toggle pause is a
+  /// local playback control and never goes through this callback).
+  final VoidCallback onPreview;
 
   @override
   Widget build(BuildContext context) {
@@ -401,6 +465,9 @@ class _PreviewButton extends StatelessWidget {
     final playing = controller.isPlaying && isCurrent;
     return IconButton(
       tooltip: isLoading ? 'Loading preview…' : 'Preview',
+      visualDensity: kSongActionDensity,
+      padding: kSongActionPadding,
+      constraints: kSongActionConstraints,
       icon: isLoading
           ? const SizedBox(
               width: 20,
@@ -415,7 +482,7 @@ class _PreviewButton extends StatelessWidget {
           ? null
           : isCurrent
               ? controller.togglePause
-              : () => controller.playPreview(song),
+              : onPreview,
     );
   }
 }
@@ -436,13 +503,16 @@ class _DownloadButton extends StatelessWidget {
         if (task == null) {
           return IconButton(
             tooltip: 'Download',
+            visualDensity: kSongActionDensity,
+            padding: kSongActionPadding,
+            constraints: kSongActionConstraints,
             icon: const Icon(Icons.download_rounded),
             onPressed: () => onDownload(song),
           );
         }
         if (task.isCompleted) {
           return const Padding(
-            padding: EdgeInsets.all(12),
+            padding: EdgeInsets.all(9),
             child: Icon(
               Icons.check_circle_outline_rounded,
               size: 22,
@@ -451,7 +521,7 @@ class _DownloadButton extends StatelessWidget {
           );
         }
         return Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(9),
           child: SizedBox(
             width: 22,
             height: 22,

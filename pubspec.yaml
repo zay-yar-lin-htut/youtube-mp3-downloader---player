@@ -43,6 +43,11 @@ dependencies:
   on_audio_query: ^2.9.0
   crypto: ^3.0.7
   permission_handler: ^13.0.2
+  audio_service: ^0.18.19
+  http: ^1.6.0
+  connectivity_plus: ^7.3.1
+  package_info_plus: ^10.2.1
+  open_filex: ^4.7.0
 
 # on_audio_query ships no Android implementation with a Gradle namespace
 # (required by AGP 9). We vendor a patched copy under third_party that adds

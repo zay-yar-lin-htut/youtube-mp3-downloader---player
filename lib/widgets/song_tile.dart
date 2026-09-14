@@ -13,7 +13,10 @@ class SongTile extends StatelessWidget {
     required this.song,
     this.onTap,
     this.subtitle,
+    this.durationLabel,
     this.badge,
+    this.resumeLabel,
+    this.timestamp,
     this.trailing,
     this.isActive = false,
   });
@@ -24,6 +27,15 @@ class SongTile extends StatelessWidget {
 
   /// Small pill label (e.g. "Downloaded" / "On device" / "YouTube").
   final String? badge;
+
+  /// Resume hint (e.g. "Continue · 1:37") shown while not active.
+  final String? resumeLabel;
+
+  /// Right-aligned song length; defaults to [song.duration].
+  final String? durationLabel;
+
+  /// Compact meta line below the artist (e.g. a download timestamp).
+  final String? timestamp;
 
   final Widget? trailing;
   final bool isActive;
@@ -56,10 +68,10 @@ class SongTile extends StatelessWidget {
                     overflow: TextOverflow.ellipsis,
                     style: AppTypography.songTitle,
                   ),
-                  if (isActive) const SizedBox(height: 2),
+                  const SizedBox(height: 2),
                   Row(
                     children: [
-                      Flexible(
+                      Expanded(
                         child: Text(
                           isActive ? 'Now playing' : subtitleText,
                           maxLines: 1,
@@ -73,12 +85,38 @@ class SongTile extends StatelessWidget {
                               : AppTypography.songSubtitle,
                         ),
                       ),
+                      if (durationLabel != null) ...[
+                        const SizedBox(width: AppSpacing.sm),
+                        Text(
+                          durationLabel!,
+                          style: AppTypography.songDuration,
+                        ),
+                      ],
+                      if (resumeLabel != null && !isActive) ...[
+                        const SizedBox(width: AppSpacing.sm),
+                        Text(
+                          resumeLabel!,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: AppColors.textMuted,
+                          ),
+                        ),
+                      ],
                       if (badge != null && !isActive) ...[
                         const SizedBox(width: AppSpacing.sm),
                         _SourceBadge(label: badge!),
                       ],
                     ],
                   ),
+                  if (timestamp != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      timestamp!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.songTimestamp,
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -92,8 +130,15 @@ class SongTile extends StatelessWidget {
     );
   }
 
-  String get subtitleText => subtitle ?? '${song.author} · ${song.duration}';
+  String get subtitleText => subtitle ?? song.author;
 }
+
+/// Compact sizing for song-row action buttons: keeps adjacent actions close
+/// together while retaining a comfortable touch target.
+const BoxConstraints kSongActionConstraints =
+    BoxConstraints(minWidth: 40, minHeight: 40);
+const VisualDensity kSongActionDensity = VisualDensity.compact;
+const EdgeInsets kSongActionPadding = EdgeInsets.zero;
 
 class _SourceBadge extends StatelessWidget {
   const _SourceBadge({required this.label});

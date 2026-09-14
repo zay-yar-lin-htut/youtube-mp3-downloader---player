@@ -13,6 +13,7 @@ class SearchField extends StatelessWidget {
     required this.onChanged,
     required this.onSubmitted,
     required this.onSearchPressed,
+    this.onClear,
     this.hintText = 'Search for music on YouTube',
     this.autofocus = false,
   });
@@ -22,25 +23,40 @@ class SearchField extends StatelessWidget {
   final ValueChanged<String> onChanged;
   final ValueChanged<String> onSubmitted;
   final VoidCallback onSearchPressed;
+
+  /// Called when the trailing Clear (X) button is tapped. Clears the field
+  /// text and resets the current search state without triggering a search.
+  final VoidCallback? onClear;
+
   final String hintText;
   final bool autofocus;
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      height: 52,
-      child: TextField(
-        controller: controller,
-        focusNode: focusNode,
-        autofocus: autofocus,
-        textInputAction: TextInputAction.search,
-        onChanged: onChanged,
-        onSubmitted: onSubmitted,
-        decoration: InputDecoration(
-          hintText: hintText,
-          suffixIcon: _SearchActionButton(onPressed: onSearchPressed),
-        ),
-      ),
+    // Rebuild whenever the field value changes (including programmatic
+    // clears) so the trailing icon always tracks the current text.
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (context, _) {
+        final hasText = controller.text.isNotEmpty;
+        return SizedBox(
+          height: 52,
+          child: TextField(
+            controller: controller,
+            focusNode: focusNode,
+            autofocus: autofocus,
+            textInputAction: TextInputAction.search,
+            onChanged: onChanged,
+            onSubmitted: onSubmitted,
+            decoration: InputDecoration(
+              hintText: hintText,
+              suffixIcon: hasText && onClear != null
+                  ? _SearchClearButton(onPressed: onClear!)
+                  : _SearchActionButton(onPressed: onSearchPressed),
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -123,6 +139,7 @@ class _SearchActionButton extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(right: 6),
       child: IconButton(
+        key: const Key('search_action'),
         tooltip: 'Search',
         iconSize: 18,
         visualDensity: VisualDensity.compact,
@@ -133,6 +150,33 @@ class _SearchActionButton extends StatelessWidget {
         ),
         onPressed: onPressed,
         icon: const Icon(Icons.search_rounded),
+      ),
+    );
+  }
+}
+
+/// The compact Clear (X) button shown while the search field has a value.
+class _SearchClearButton extends StatelessWidget {
+  const _SearchClearButton({required this.onPressed});
+
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: IconButton(
+        key: const Key('search_clear'),
+        tooltip: 'Clear search',
+        iconSize: 18,
+        visualDensity: VisualDensity.compact,
+        style: IconButton.styleFrom(
+          backgroundColor: AppColors.surfaceMuted,
+          foregroundColor: AppColors.textSecondary,
+          padding: const EdgeInsets.all(8),
+        ),
+        onPressed: onPressed,
+        icon: const Icon(Icons.clear),
       ),
     );
   }

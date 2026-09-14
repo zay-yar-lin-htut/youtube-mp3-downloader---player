@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:yt_local_music/main.dart';
 import 'package:yt_local_music/models/song.dart';
 import 'package:yt_local_music/player/music_player_controller.dart';
+import 'package:yt_local_music/widgets/song_tile.dart';
 
 import 'fakes/fake_audio_engine.dart';
 
@@ -49,6 +50,10 @@ void main() {
     // Detail app bar keeps the standard filter control separate from Sort.
     expect(find.byTooltip('Filter'), findsOneWidget);
     expect(find.byTooltip('Sort'), findsOneWidget);
+
+    // The playlist detail stays inside the app shell: the bottom navigation
+    // bar remains visible (not hidden by a full-screen pushed route).
+    expect(find.byType(NavigationBar), findsOneWidget);
 
     // Pop back to root, then back to Search.
     await tester.tap(find.byIcon(Icons.arrow_back_ios_new_rounded));
@@ -150,6 +155,9 @@ void main() {
 
     await controller.stopAndClear();
     await tester.pumpAndSettle();
+    // The controller is app-scoped (owned by main, not the widget), so the
+    // test that created it must dispose it to stop the sleep-timer ticker.
+    controller.dispose();
   });
 
   testWidgets('playSongList sets context name for playback',
@@ -167,5 +175,68 @@ void main() {
 
     await controller.stopAndClear();
     expect(controller.playbackContextName, isNull);
+  });
+
+  testWidgets('Now Playing exposes the 10-second seek controls', (tester) async {
+    final controller = MusicPlayerController(engine: FakeAudioEngine());
+    await tester.pumpWidget(_app(controller));
+    await tester.pumpAndSettle();
+
+    await controller.playLocal(_song('a', path: '/tmp/a.m4a'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Song a'));
+    await tester.pumpAndSettle();
+    expect(find.text('Now Playing'), findsOneWidget);
+    expect(find.byTooltip('Back 10 seconds'), findsOneWidget);
+    expect(find.byTooltip('Forward 10 seconds'), findsOneWidget);
+    expect(find.byTooltip('Previous'), findsOneWidget);
+    expect(find.byTooltip('Next'), findsOneWidget);
+
+    await controller.stopAndClear();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('Mini player stays visible on the playlist detail route',
+      (tester) async {
+    final controller = MusicPlayerController(engine: FakeAudioEngine());
+    await tester.pumpWidget(_app(controller));
+    await tester.pumpAndSettle();
+
+    await controller.playLocal(_song('a', path: '/tmp/a.m4a'));
+    await tester.pumpAndSettle();
+
+    // Navigate down into a detail page (All view) — an in-tab page that keeps
+    // the app-level bottom navigation bar visible.
+    await tester.tap(find.text('Playlist'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('All'));
+    await tester.pumpAndSettle();
+
+    // The bottom navigation bar stays visible on the detail page.
+    expect(find.byType(NavigationBar), findsOneWidget);
+
+    // The global mini player still floats above the details.
+    expect(find.text('Song a'), findsOneWidget);
+
+    // Tapping it opens the full Now Playing view.
+    await tester.tap(find.text('Song a'));
+    await tester.pumpAndSettle();
+    expect(find.text('Now Playing'), findsOneWidget);
+
+    await controller.stopAndClear();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('SongTile surfaces the Continue resume hint', (tester) async {
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SongTile(
+          song: _song('a'),
+          resumeLabel: 'Continue · 1:37',
+        ),
+      ),
+    ));
+    expect(find.text('Continue · 1:37'), findsOneWidget);
   });
 }

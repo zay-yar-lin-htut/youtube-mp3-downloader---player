@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -15,8 +16,10 @@ import '../theme/app_colors.dart';
 import '../theme/app_radius.dart';
 import '../theme/app_spacing.dart';
 import '../theme/app_typography.dart';
+import '../player/time_format.dart';
 import '../widgets/song_tile.dart';
 import '../widgets/song_info_dialog.dart';
+import 'now_playing_screen.dart';
 
 // ---------------------------------------------------------------------------
 // Enums
@@ -27,6 +30,24 @@ enum PlaylistSystemView { all, downloaded, onDevice }
 
 /// Sort order for any song list.
 enum PlaylistSort { recentlyAdded, title, artist, duration }
+
+/// Parameters describing the in-tab detail page shown on top of the Playlist
+/// root list (system view OR custom playlist).
+class _DetailRequest {
+  const _DetailRequest({
+    required this.playerController,
+    required this.repository,
+    this.systemView,
+    this.playlistId,
+    this.playlistName = '',
+  });
+
+  final MusicPlayerController playerController;
+  final PlaylistRepository repository;
+  final PlaylistSystemView? systemView;
+  final String? playlistId;
+  final String playlistName;
+}
 
 // ---------------------------------------------------------------------------
 // Root screen: System views + My Playlists
@@ -60,6 +81,10 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
 
   List<CustomPlaylist> _customPlaylists = [];
   int _lastHistoryRevision = -1;
+
+  /// The detail page currently shown in-place on this tab (null = root list).
+  /// In-tab navigation keeps the app-level bottom navigation bar visible.
+  _DetailRequest? _detail;
 
   @override
   void initState() {
@@ -129,17 +154,22 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
   }
 
   void _openDetail({PlaylistSystemView? systemView, String? playlistId, String? playlistName}) {
-    Navigator.of(context).push<void>(
-      MaterialPageRoute(
-        builder: (_) => PlaylistDetailScreen(
-          playerController: widget.playerController,
-          repository: widget.repository ?? _repository,
-          systemView: systemView,
-          playlistId: playlistId,
-          playlistName: playlistName ?? '',
-        ),
-      ),
-    ).then((_) => _load());
+    setState(() {
+      _detail = _DetailRequest(
+        playerController: widget.playerController,
+        repository: widget.repository ?? _repository,
+        systemView: systemView,
+        playlistId: playlistId,
+        playlistName: playlistName ?? '',
+      );
+    });
+  }
+
+  void _closeDetail() {
+    setState(() {
+      _detail = null;
+    });
+    _load();
   }
 
   Future<void> _showNewPlaylistDialog() async {
@@ -167,76 +197,98 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final detail = _detail;
+    if (detail != null) {
+      return PopScope(
+        canPop: false,
+        onPopInvokedWithResult: (didPop, _) {
+          if (didPop) return;
+          _closeDetail();
+        },
+        child: PlaylistDetailScreen(
+          playerController: detail.playerController,
+          repository: detail.repository,
+          systemView: detail.systemView,
+          playlistId: detail.playlistId,
+          playlistName: detail.playlistName,
+          onBack: _closeDetail,
+        ),
+      );
+    }
+
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator());
     }
 
-    return RefreshIndicator(
-      onRefresh: _load,
-      child: ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(
-          AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.sm,
-        ),
-        children: [
-          Text('Playlists', style: AppTypography.screenHeading),
-          const SizedBox(height: AppSpacing.lg),
+    return PopScope(
+      canPop: true,
+      child: RefreshIndicator(
+        onRefresh: _load,
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(
+            AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.sm,
+          ),
+          children: [
+            Text('Playlists', style: AppTypography.screenHeading),
+            const SizedBox(height: AppSpacing.lg),
 
-          // ── System views ──────────────────────────────────────────
-          _ViewTile(
-            icon: Icons.library_music_outlined,
-            label: 'All',
-            count: _allCount,
-            onTap: () => _openDetail(systemView: PlaylistSystemView.all),
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          _ViewTile(
-            icon: Icons.download_outlined,
-            label: 'Downloaded',
-            count: _downloadedCount,
-            onTap: () => _openDetail(systemView: PlaylistSystemView.downloaded),
-          ),
-          const SizedBox(height: AppSpacing.xs),
-          _ViewTile(
-            icon: Icons.smartphone_rounded,
-            label: 'On device',
-            count: _onDeviceCount,
-            onTap: () => _openDetail(systemView: PlaylistSystemView.onDevice),
-          ),
-          const SizedBox(height: AppSpacing.lg),
-
-          // ── Custom playlists ──────────────────────────────────────
-          if (_customPlaylists.isNotEmpty) ...[
-            Text('My Playlists', style: AppTypography.caption),
-            const SizedBox(height: AppSpacing.sm),
-            ..._customPlaylists.map((pl) => Padding(
-                  padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-                  child: _CustomPlaylistTile(
-                    playlist: pl,
-                    onTap: () => _openDetail(
-                      playlistId: pl.id,
-                      playlistName: pl.name,
-                    ),
-                    onRename: () => _renamePlaylist(pl),
-                    onDelete: () => _deletePlaylist(pl),
-                  ),
-                )),
+            // ── System views ──────────────────────────────────────────
+            _ViewTile(
+              icon: Icons.library_music_outlined,
+              label: 'All',
+              count: _allCount,
+              onTap: () => _openDetail(systemView: PlaylistSystemView.all),
+            ),
             const SizedBox(height: AppSpacing.xs),
-          ],
+            _ViewTile(
+              icon: Icons.download_outlined,
+              label: 'Downloaded',
+              count: _downloadedCount,
+              onTap: () => _openDetail(systemView: PlaylistSystemView.downloaded),
+            ),
+            const SizedBox(height: AppSpacing.xs),
+            _ViewTile(
+              icon: Icons.smartphone_rounded,
+              label: 'On device',
+              count: _onDeviceCount,
+              onTap: () => _openDetail(systemView: PlaylistSystemView.onDevice),
+            ),
+            const SizedBox(height: AppSpacing.lg),
 
-          // ── New playlist button ───────────────────────────────────
-          ListTile(
-            leading: const Icon(Icons.add_circle_outline, color: AppColors.primary),
-            title: const Text(
-              'New playlist',
-              style: TextStyle(color: AppColors.textPrimary),
+            // ── Custom playlists ──────────────────────────────────────
+            if (_customPlaylists.isNotEmpty) ...[
+              Text('My Playlists', style: AppTypography.caption),
+              const SizedBox(height: AppSpacing.sm),
+              ..._customPlaylists.map((pl) => Padding(
+                    padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+                    child: _CustomPlaylistTile(
+                      playlist: pl,
+                      onTap: () => _openDetail(
+                        playlistId: pl.id,
+                        playlistName: pl.name,
+                      ),
+                      onRename: () => _renamePlaylist(pl),
+                      onDelete: () => _deletePlaylist(pl),
+                    ),
+                  )),
+              const SizedBox(height: AppSpacing.xs),
+            ],
+
+            // ── New playlist button ───────────────────────────────────
+            ListTile(
+              leading: const Icon(Icons.add_circle_outline, color: AppColors.primary),
+              title: const Text(
+                'New playlist',
+                style: TextStyle(color: AppColors.textPrimary),
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(AppRadius.md),
+              ),
+              onTap: _showNewPlaylistDialog,
             ),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(AppRadius.md),
-            ),
-            onTap: _showNewPlaylistDialog,
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -295,6 +347,7 @@ class PlaylistDetailScreen extends StatefulWidget {
     this.systemView,
     this.playlistId,
     this.playlistName = '',
+    this.onBack,
   });
 
   final MusicPlayerController playerController;
@@ -302,6 +355,11 @@ class PlaylistDetailScreen extends StatefulWidget {
   final PlaylistSystemView? systemView;
   final String? playlistId;
   final String playlistName;
+
+  /// Called instead of a Navigator pop when the detail page is shown in-tab
+  /// beneath the app shell (keeps the bottom navigation bar visible). Falls
+  /// back to a Navigator pop when null (standalone/route usage).
+  final VoidCallback? onBack;
 
   @override
   State<PlaylistDetailScreen> createState() => _PlaylistDetailScreenState();
@@ -466,6 +524,15 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
       PlaylistSystemView.downloaded => 'Downloaded',
       PlaylistSystemView.onDevice => 'On device',
     };
+  }
+
+  void _goBack() {
+    final onBack = widget.onBack;
+    if (onBack != null) {
+      onBack();
+    } else {
+      Navigator.of(context).maybePop();
+    }
   }
 
   void _playSong(Song song) {
@@ -673,7 +740,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
         appBar: AppBar(
           leading: IconButton(
             icon: const Icon(Icons.arrow_back_ios_new_rounded),
-            onPressed: () => Navigator.of(context).pop(),
+            onPressed: _goBack,
           ),
           title: Text(_appBarTitle, style: AppTypography.appBarTitle),
         ),
@@ -685,7 +752,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
       appBar: AppBar(
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded),
-          onPressed: () => Navigator.of(context).pop(),
+          onPressed: _goBack,
         ),
         title: Text(_appBarTitle, style: AppTypography.appBarTitle),
         actions: [
@@ -802,34 +869,44 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
                         song.source == SongSource.downloaded;
                     final isDevice =
                         song.source == SongSource.device;
+                    final resume =
+                        widget.playerController.resumePositions[song.id];
+                    final resumeLabel =
+                        !isActive && resume != null && resume > Duration.zero
+                            ? 'Continue · ${formatDuration(resume)}'
+                            : null;
+                    final isCurrentAndPlaying =
+                        isActive && widget.playerController.isPlaying;
 
                     return Padding(
                       padding: const EdgeInsets.only(bottom: AppSpacing.xs),
                       child: SongTile(
                         song: song,
                         isActive: isActive,
+                        resumeLabel: resumeLabel,
                         badge: isDownload
                             ? 'Downloaded'
                             : isDevice
                                 ? 'On device'
                                 : null,
-                        onTap: () => _playSong(song),
+                        onTap: () => _openNowPlaying(song),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
-                              tooltip: isActive &&
-                                      widget.playerController.isPlaying
+                              tooltip: isCurrentAndPlaying
                                   ? 'Pause'
                                   : 'Play',
+                              visualDensity: kSongActionDensity,
+                              padding: kSongActionPadding,
+                              constraints: kSongActionConstraints,
                               icon: Icon(
-                                isActive &&
-                                        widget.playerController.isPlaying
+                                isCurrentAndPlaying
                                     ? Icons.pause_rounded
                                     : Icons.play_arrow_rounded,
                                 color: AppColors.textPrimary,
                               ),
-                              onPressed: () => _playSong(song),
+                              onPressed: () => _togglePlay(song),
                             ),
                             _SongMenu(
                               song: song,
@@ -865,6 +942,31 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
         },
       ),
     );
+  }
+
+  /// Opens the full Now Playing page. If the tapped song is not the current
+  /// one, selects/starts it first through the shared player, then navigates.
+  void _openNowPlaying(Song song) {
+    if (widget.playerController.currentSong?.id != song.id) {
+      _playSong(song);
+    }
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => NowPlayingScreen(controller: widget.playerController),
+      ),
+    );
+  }
+
+  /// Play/Resume toggle for a row. Only the current song toggles playback;
+  /// any other (or no current) song uses the existing selection logic.
+  void _togglePlay(Song song) {
+    final controller = widget.playerController;
+    if (controller.currentSong?.id == song.id) {
+      unawaited(controller.togglePause());
+    } else {
+      _playSong(song);
+    }
   }
 }
 
@@ -1055,6 +1157,7 @@ class _SongMenu extends StatelessWidget {
     return PopupMenuButton<String>(
       tooltip: 'More',
       color: AppColors.surfaceElevated,
+      padding: EdgeInsets.zero,
       icon: const Icon(Icons.more_vert, color: AppColors.textSecondary),
       onSelected: (value) {
         switch (value) {

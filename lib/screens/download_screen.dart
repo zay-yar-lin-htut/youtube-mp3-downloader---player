@@ -206,9 +206,10 @@ class _DownloadScreenState extends State<DownloadScreen> {
                     padding: const EdgeInsets.only(bottom: AppSpacing.xs),
                     child: SongTile(
                       song: song,
-                      subtitle: song.downloadedAt == null
-                          ? 'Downloaded'
-                          : 'Downloaded · ${formatDownloaded(song.downloadedAt!)}',
+                      subtitle: 'Downloaded',
+                      timestamp: song.downloadedAt == null
+                          ? null
+                          : formatDownloaded(song.downloadedAt!),
                       onTap: () => SongInfoDialog.show(context, song),
                     ),
                   ),

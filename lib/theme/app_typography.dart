@@ -26,7 +26,7 @@ abstract final class AppTypography {
   );
 
   static const TextStyle songTitle = TextStyle(
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: FontWeight.w600,
     color: AppColors.textPrimary,
   );
@@ -38,8 +38,21 @@ abstract final class AppTypography {
   );
 
   static const TextStyle songSubtitle = TextStyle(
-    fontSize: 13,
+    fontSize: 12,
     color: AppColors.textSecondary,
+  );
+
+  /// Right-aligned song length (e.g. "3:42") on the meta line.
+  static const TextStyle songDuration = TextStyle(
+    fontSize: 12,
+    fontWeight: FontWeight.w500,
+    color: AppColors.textSecondary,
+  );
+
+  /// Compact download timestamp under the meta line (e.g. "Sep 9, 2026").
+  static const TextStyle songTimestamp = TextStyle(
+    fontSize: 11,
+    color: AppColors.textMuted,
   );
 
   static const TextStyle playlistUbuntu = TextStyle(

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/song.dart';
 import '../services/audio_service.dart' show AudioService;
+import '../services/resume_store.dart';
 import 'audio_engine.dart';
 import 'player_queue.dart';
 
@@ -16,6 +17,7 @@ class MusicPlayerController extends ChangeNotifier {
     this.streamUrlResolver,
     PlayerQueue? queue,
     DateTime Function()? clock,
+    this.resumeStore,
   })  : engine = engine ?? AudioService(),
         queue = queue ?? PlayerQueue(),
         _clock = clock ?? DateTime.now;
@@ -23,6 +25,11 @@ class MusicPlayerController extends ChangeNotifier {
   final AudioEngine engine;
   final PlayerQueue queue;
   final DateTime Function() _clock;
+
+  /// Optional per-song resume store. When null, resume listening is disabled
+  /// (so pure-Dart tests never touch the database). Production wires the real
+  /// [DatabaseResumeStore] in main.dart.
+  final ResumeStore? resumeStore;
 
   /// Resolves a preview stream URL for a song id when playing previews.
   final Future<String?> Function(String songId)? streamUrlResolver;
@@ -63,6 +70,19 @@ class MusicPlayerController extends ChangeNotifier {
 
   ValueListenable<Duration> get durationNotifier => _duration;
 
+  /// How often the running position is flushed while playing. Pause/stop/song
+  /// changes always checkpoint immediately regardless of this interval.
+  static const Duration resumeSaveInterval = Duration(seconds: 5);
+
+  /// Absolute position of the last persisted resume point, used to throttle
+  /// periodic saves. Null once nothing is saved yet for the active track.
+  Duration? _lastPersistedPosition;
+
+  /// In-memory mirror of saved resume positions (songId -> position). Warmly
+  /// loaded at startup and updated as positions are saved/cleared so the UI
+  /// can show "Continue · 1:37" hints without extra queries.
+  final Map<String, Duration> resumePositions = {};
+
   bool _disposed = false;
 
   /// Whether this controller is the one owned by the widget layer (it is the
@@ -80,6 +100,7 @@ class MusicPlayerController extends ChangeNotifier {
 
   void _onPositionChanged() {
     _position.value = engine.position.value;
+    _maybePersistResume();
   }
 
   void _onDurationChanged() {
@@ -88,10 +109,119 @@ class MusicPlayerController extends ChangeNotifier {
 
   void _onEngineStage(EngineStage stage) {
     if (stage == EngineStage.completed) {
+      final finishedId = queue.currentSong?.id;
       _autoAdvance();
+      // A song that finished naturally has no resume point anymore: replaying
+      // it starts from the top.
+      if (finishedId != null) {
+        _clearResume(finishedId);
+        _lastPersistedPosition = null;
+      }
     } else if (stage == EngineStage.error) {
       lastError = 'Playback error';
       notifyListeners();
+    }
+  }
+
+  /// Throttled periodic save of the running position (at most every
+  /// [resumeSaveInterval]) so resume points survive a crash or a kill.
+  void _maybePersistResume() {
+    final song = queue.currentSong;
+    final store = resumeStore;
+    if (song == null || store == null) {
+      return;
+    }
+    final pos = _position.value;
+    if (pos <= Duration.zero) {
+      return;
+    }
+    final last = _lastPersistedPosition;
+    if (last != null && pos - last < resumeSaveInterval) {
+      return;
+    }
+    _lastPersistedPosition = pos;
+    resumePositions[song.id] = pos;
+    unawaited(store.save(song.id, pos));
+  }
+
+  /// Immediate save of the current position (pause, stop, song change).
+  Future<void> _checkpointResume() async {
+    final song = queue.currentSong;
+    final store = resumeStore;
+    if (song == null || store == null) {
+      return;
+    }
+    final pos = _position.value;
+    if (pos <= Duration.zero) {
+      return;
+    }
+    resumePositions[song.id] = pos;
+    await store.save(song.id, pos);
+  }
+
+  /// Saves a specific song's position without touching queue state. Used to
+  /// capture the outgoing track before a queue replacement.
+  Future<void> _persistSnapshot(Song song, Duration position) async {
+    final store = resumeStore;
+    if (store == null || position <= Duration.zero) {
+      return;
+    }
+    resumePositions[song.id] = position;
+    await store.save(song.id, position);
+  }
+
+  /// Drops a song's saved resume point (natural completion / deletion).
+  void _clearResume(String songId) {
+    resumePositions.remove(songId);
+    final store = resumeStore;
+    if (store == null) {
+      return;
+    }
+    unawaited(store.clear(songId));
+  }
+
+  /// Restores a saved position after a song loads. A position at or beyond the
+  /// source duration is treated as finished and cleared instead.
+  Future<void> _restorePosition(Song song) async {
+    final store = resumeStore;
+    if (store == null) {
+      return;
+    }
+    try {
+      final saved = await store.load(song.id);
+      if (saved == null || saved <= Duration.zero) {
+        return;
+      }
+      final total = engine.duration.value;
+      if (total > Duration.zero && saved >= total) {
+        resumePositions.remove(song.id);
+        await store.clear(song.id);
+        return;
+      }
+      await engine.seekTo(saved);
+      resumePositions[song.id] = saved;
+      if (!_disposed) {
+        _position.value = saved;
+      }
+    } catch (e) {
+      debugPrint('[MusicPlayerController] could not restore position: $e');
+    }
+  }
+
+  /// Warms the in-memory resume cache from the store (call once at startup).
+  Future<void> warmResumePositions() async {
+    final store = resumeStore;
+    if (store == null) {
+      return;
+    }
+    try {
+      final all = await store.loadAll();
+      resumePositions
+        ..clear()
+        ..addAll(all);
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[MusicPlayerController] could not warm resume positions: $e');
     }
   }
 
@@ -143,12 +273,14 @@ class MusicPlayerController extends ChangeNotifier {
   }
 
   Future<void> playLocal(Song song) async {
+    await _checkpointResume();
     _resetError();
     playbackContextName = null;
     queue.insertAndPlay(QueueEntry(song: song, source: PlaybackSource.local));
     notifyListeners();
     try {
       await engine.loadLocal(song.localPath!);
+      await _restorePosition(song);
     } catch (e) {
       _playbackFailed(song, e);
     }
@@ -156,6 +288,7 @@ class MusicPlayerController extends ChangeNotifier {
 
   Future<void> playLocalList(List<Song> songs,
       {int index = 0, String? contextName}) async {
+    await _checkpointResume();
     _resetError();
     playbackContextName = contextName;
     final entries = songs
@@ -173,6 +306,7 @@ class MusicPlayerController extends ChangeNotifier {
   /// preview), useful for the Playlist view.
   Future<void> playSongList(List<Song> songs,
       {int index = 0, String? contextName}) async {
+    await _checkpointResume();
     playbackContextName = contextName;
     final entries = <QueueEntry>[];
     for (final song in songs) {
@@ -188,6 +322,12 @@ class MusicPlayerController extends ChangeNotifier {
   }
 
   Future<void> playPreview(Song song) async {
+    // Snapshot the outgoing track synchronously: replacing the queue below is
+    // atomic, and waiting on persistence here would race the generation guard.
+    final outgoing = queue.currentSong;
+    if (outgoing != null) {
+      unawaited(_persistSnapshot(outgoing, _position.value));
+    }
     _resetError();
     playbackContextName = null;
     final generation = ++_previewGeneration;
@@ -223,6 +363,7 @@ class MusicPlayerController extends ChangeNotifier {
       if (generation != _previewGeneration) {
         return;
       }
+      await _restorePosition(song);
       _previewLoadingSongId = null;
       notifyListeners();
     } catch (e) {
@@ -243,6 +384,7 @@ class MusicPlayerController extends ChangeNotifier {
           (entry.source == PlaybackSource.local ||
               entry.source == PlaybackSource.device)) {
         await engine.loadLocal(entry.song.localPath!);
+        await _restorePosition(entry.song);
       } else {
         final url = await streamUrlResolver?.call(entry.song.id);
         if (url == null) {
@@ -252,6 +394,7 @@ class MusicPlayerController extends ChangeNotifier {
           return;
         }
         await engine.loadRemote(url);
+        await _restorePosition(entry.song);
       }
     } catch (e) {
       _playbackFailed(entry.song, e);
@@ -286,6 +429,7 @@ class MusicPlayerController extends ChangeNotifier {
       return;
     }
     if (isPlaying) {
+      await _checkpointResume();
       await engine.pause();
     } else {
       await engine.play();
@@ -294,6 +438,7 @@ class MusicPlayerController extends ChangeNotifier {
   }
 
   Future<void> next() async {
+    await _checkpointResume();
     final nextEntry = queue.peekNext(wrapAtEnd: repeatMode == RepeatStyle.all);
     if (nextEntry == null) {
       await _handleQueueEnd();
@@ -301,6 +446,7 @@ class MusicPlayerController extends ChangeNotifier {
     }
     queue.advance();
     await _playCurrentEntry();
+    notifyListeners();
   }
 
   Future<void> previous() async {
@@ -313,14 +459,37 @@ class MusicPlayerController extends ChangeNotifier {
       final idx = queue.activeOrder.indexWhere((e) =>
           e.song.id == previousEntry.song.id && e.source == previousEntry.source);
       if (idx >= 0) {
+        await _checkpointResume();
         queue.goToActiveIndex(idx);
         await _playCurrentEntry();
       }
     }
+    notifyListeners();
   }
 
   Future<void> seekTo(Duration position) async {
     await engine.seekTo(position);
+  }
+
+  /// Rewinds by 10 seconds, clamped at the start of the track.
+  Future<void> seekBack10() async {
+    final target = _position.value - const Duration(seconds: 10);
+    final clamped = target.isNegative ? Duration.zero : target;
+    await engine.seekTo(clamped);
+    if (!_disposed) {
+      _position.value = clamped;
+    }
+  }
+
+  /// Skips forward by 10 seconds, clamped at the track duration.
+  Future<void> seekForward10() async {
+    final total = _duration.value;
+    final target = _position.value + const Duration(seconds: 10);
+    final clamped = total > Duration.zero && target > total ? total : target;
+    await engine.seekTo(clamped);
+    if (!_disposed) {
+      _position.value = clamped;
+    }
   }
 
   void toggleShuffle() {
@@ -401,6 +570,7 @@ class MusicPlayerController extends ChangeNotifier {
     _sleepTimerEndsAt = null;
     _sleepTicker?.cancel();
     _sleepTicker = null;
+    await _checkpointResume();
     await engine.pause();
     notifyListeners();
   }
@@ -424,9 +594,13 @@ class MusicPlayerController extends ChangeNotifier {
     if (wasCurrent) {
       queue.removeSong(songId);
       await stopAndClear();
+      // The song is gone from the library; its resume point must vanish too
+      // even though stopAndClear just checkpointed it.
+      _clearResume(songId);
       return;
     }
     queue.removeSong(songId);
+    _clearResume(songId);
     notifyListeners();
   }
 
@@ -434,10 +608,12 @@ class MusicPlayerController extends ChangeNotifier {
     _previewGeneration++; // invalidate any in-flight preview
     _previewLoadingSongId = null;
     playbackContextName = null;
+    await _checkpointResume();
     await engine.stop();
     queue.removeAll();
     _position.value = Duration.zero;
     _duration.value = Duration.zero;
+    _lastPersistedPosition = null;
     lastError = null;
     notifyListeners();
   }

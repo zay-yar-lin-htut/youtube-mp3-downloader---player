@@ -126,10 +126,10 @@ $env:GITHUB_REPOSITORY = "FreeVibe"
 $env:FORCE_UPDATE = "false"
 ```
 
-Start the server:
+Start the local server (note: `dev`, not `start` — see the Vercel note below):
 
 ```bash
-npm start
+npm run dev
 ```
 
 Then check the endpoint:
@@ -158,14 +158,23 @@ assets, GitHub API failures, caching, CORS, and HTTP method handling.
 
 1. Push this folder to a GitHub repository.
 2. Go to https://vercel.com and click **Add New Project**.
-3. Import the GitHub repository.
-4. Add the environment variables above:
+3. Import the GitHub repository. If the folder lives inside a monorepo, set the
+   **Root Directory** to this folder (`ver_api`).
+4. Leave the **Build Command** empty and the **Framework Preset** set to **Other**.
+5. Add the environment variables above:
    - `GITHUB_OWNER`
    - `GITHUB_REPOSITORY`
    - `FORCE_UPDATE`
    - `GITHUB_TOKEN` (only for a private repository)
-5. Vercel detects the Serverless Function automatically. No settings needed.
-6. Click **Deploy**.
+6. Click **Deploy**. Vercel builds `api/version.js` as a Serverless Function.
+
+> **Important:** this project must use Vercel Serverless Functions, not a Node
+> server. Do **not** add a `start` script to `package.json`. Vercel treats a
+> project that has a `start` script as a long-running Node server and will run
+> `npm start` during the build, which hangs the deployment. This project uses
+> `npm run dev` only for local testing. If your Vercel settings still show a
+> build command of `npm run start`, clear it in **Project → Settings → General →
+> Build Command**.
 
 You get a URL like:
 

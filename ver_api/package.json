@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Version-check API for the FreeVibe Flutter app, driven by GitHub Releases and deployed on Vercel.",
   "scripts": {
-    "dev": "node api/version.js",
+    "dev": "node dev-server.js",
     "test": "node --test"
   },
   "engines": {

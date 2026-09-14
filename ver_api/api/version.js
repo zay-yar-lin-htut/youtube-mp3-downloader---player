@@ -1,5 +1,3 @@
-const http = require("http");
-
 const REQUEST_TIMEOUT_MS = 10_000;
 const CACHE_TTL_MS = 60_000;
 const USER_AGENT = "FreeVibe-Update-API";
@@ -142,15 +140,3 @@ module.exports.parseVersionTag = parseVersionTag;
 module.exports.findApkAsset = findApkAsset;
 module.exports.fetchLatestRelease = fetchLatestRelease;
 module.exports.getVersionPayload = getVersionPayload;
-
-if (require.main === module) {
-  const PORT = process.env.PORT || 3000;
-  http
-    .createServer((req, res) => handler(req, res))
-    .listen(PORT, () => {
-      console.log(`FreeVibe Update API listening on http://localhost:${PORT}/api/version`);
-      if (!process.env.GITHUB_OWNER || !process.env.GITHUB_REPOSITORY) {
-        console.warn("GITHUB_OWNER and GITHUB_REPOSITORY environment variables are not set.");
-      }
-    });
-}

@@ -215,7 +215,8 @@ The API always returns JSON, never an HTML error page:
 ```text
 freevibe-update-api/
 ├── api/
-│   └── version.js       # the Vercel serverless function
+│   └── version.js       # the Vercel serverless function (exports a handler)
+├── dev-server.js        # local-only test server (npm run dev)
 ├── test/
 │   ├── api.test.js      # API behavior tests
 │   └── version-parser.test.js  # tag parsing tests

@@ -73,7 +73,10 @@ class _DownloadScreenState extends State<DownloadScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Clear', style: TextStyle(color: AppColors.error)),
+            child: const Text(
+              'Clear',
+              style: TextStyle(color: AppColors.error),
+            ),
           ),
         ],
       ),
@@ -83,141 +86,151 @@ class _DownloadScreenState extends State<DownloadScreen> {
     await DatabaseService.instance.clearDownloadHistory();
     DownloadManager.instance.notifyHistoryChanged();
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Download history cleared')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('History cleared')));
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return ListenableBuilder(
-      listenable: DownloadManager.instance,
-      builder: (context, _) {
-        final activeTasks = DownloadManager.instance.activeDownloads.values
-            .where((task) => !task.isCompleted)
-            .toList();
-        final failed = DownloadManager.instance.failedDownloads.entries.toList();
+    return DefaultTextStyle.merge(
+      style: const TextStyle(decoration: TextDecoration.none),
+      child: ListenableBuilder(
+        listenable: DownloadManager.instance,
+        builder: (context, _) {
+          final activeTasks = DownloadManager.instance.activeDownloads.values
+              .where((task) => !task.isCompleted)
+              .toList();
+          final failed = DownloadManager.instance.failedDownloads.entries
+              .toList();
 
-        if (_isLoading) {
-          return const Center(child: CircularProgressIndicator());
-        }
+          if (_isLoading) {
+            return const Center(child: CircularProgressIndicator());
+          }
 
-        return RefreshIndicator(
-          onRefresh: _loadHistory,
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(
-              AppSpacing.lg,
-              AppSpacing.lg,
-              AppSpacing.lg,
-              AppSpacing.sm,
-            ),
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(bottom: AppSpacing.md),
-                child: Text('Downloads', style: AppTypography.screenHeading),
+          return RefreshIndicator(
+            onRefresh: _loadHistory,
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg,
+                AppSpacing.lg,
+                AppSpacing.lg,
+                AppSpacing.sm,
               ),
-              if (activeTasks.isNotEmpty) ...[
-                _SectionLabel('Downloading'),
-                const SizedBox(height: AppSpacing.xs),
-                ...activeTasks.map((task) {
-                  return _ActiveDownloadCard(task: task);
-                }),
-                const SizedBox(height: AppSpacing.xl),
-              ],
-              if (failed.isNotEmpty) ...[
-                _SectionLabel('Failed'),
-                const SizedBox(height: AppSpacing.xs),
-                ...failed.map(
-                  (entry) => ListTile(
-                    leading: const Icon(
-                      Icons.error_outline_rounded,
-                      color: AppColors.error,
-                    ),
-                    title: Text(
-                      entry.value,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: AppTypography.songTitleSmall,
-                    ),
-                    subtitle: const Text(
-                      'Download failed — try again from Search',
-                      style: AppTypography.songSubtitle,
-                    ),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.close, color: AppColors.textMuted),
-                      tooltip: 'Dismiss',
-                      onPressed: () =>
-                          DownloadManager.instance.removeFailure(entry.key),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: AppSpacing.xl),
-              ],
-              Padding(
-                padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-                child: Row(
+              children: [
+                Row(
                   children: [
-                    Text(
-                      'Download history (${_history.length})',
-                      style: AppTypography.playlistUbuntu,
+                    IconButton(
+                      onPressed: () => Navigator.of(context).maybePop(),
+                      tooltip: 'Back',
+                      icon: const Icon(Icons.arrow_back_rounded),
                     ),
-                    const Spacer(),
-                    if (_history.isNotEmpty)
-                      TextButton(
-                        onPressed: _confirmClearHistory,
-                        child: const Text(
-                          'Clear history',
-                          style: TextStyle(color: AppColors.error),
-                        ),
-                      ),
+                    Text('History', style: AppTypography.screenHeading),
                   ],
                 ),
-              ),
-              if (_history.isEmpty)
-                const Padding(
-                  padding: EdgeInsets.symmetric(vertical: AppSpacing.xxl),
-                  child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.history_rounded,
-                          size: 56,
+                if (activeTasks.isNotEmpty) ...[
+                  _SectionLabel('Downloading'),
+                  const SizedBox(height: AppSpacing.xs),
+                  ...activeTasks.map((task) {
+                    return _ActiveDownloadCard(task: task);
+                  }),
+                  const SizedBox(height: AppSpacing.xl),
+                ],
+                if (failed.isNotEmpty) ...[
+                  _SectionLabel('Failed'),
+                  const SizedBox(height: AppSpacing.xs),
+                  ...failed.map(
+                    (entry) => ListTile(
+                      leading: const Icon(
+                        Icons.error_outline_rounded,
+                        color: AppColors.error,
+                      ),
+                      title: Text(
+                        entry.value,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: AppTypography.songTitleSmall,
+                      ),
+                      subtitle: const Text(
+                        'Download failed — try again from Search',
+                        style: AppTypography.songSubtitle,
+                      ),
+                      trailing: IconButton(
+                        icon: const Icon(
+                          Icons.close,
                           color: AppColors.textMuted,
                         ),
-                        SizedBox(height: AppSpacing.md),
-                        Text(
-                          'No download history',
-                          style: AppTypography.caption,
-                        ),
-                        SizedBox(height: AppSpacing.xs),
-                        Text(
-                          'Completed downloads appear here with timestamps',
-                          style: AppTypography.caption,
-                        ),
-                      ],
+                        tooltip: 'Dismiss',
+                        onPressed: () =>
+                            DownloadManager.instance.removeFailure(entry.key),
+                      ),
                     ),
                   ),
-                )
-              else
-                ..._history.map(
-                  (song) => Padding(
-                    padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-                    child: SongTile(
-                      song: song,
-                      subtitle: 'Downloaded',
-                      timestamp: song.downloadedAt == null
-                          ? null
-                          : formatDownloaded(song.downloadedAt!),
-                      onTap: () => SongInfoDialog.show(context, song),
-                    ),
+                  const SizedBox(height: AppSpacing.xl),
+                ],
+                Padding(
+                  padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+                  child: Row(
+                    children: [
+                      Text(
+                        'History (${_history.length})',
+                        style: AppTypography.playlistUbuntu,
+                      ),
+                      const Spacer(),
+                      if (_history.isNotEmpty)
+                        TextButton(
+                          onPressed: _confirmClearHistory,
+                          child: const Text(
+                            'Clear history',
+                            style: TextStyle(color: AppColors.error),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
-            ],
-          ),
-        );
-      },
+                if (_history.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: AppSpacing.xxl),
+                    child: Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.history_rounded,
+                            size: 56,
+                            color: AppColors.textMuted,
+                          ),
+                          SizedBox(height: AppSpacing.md),
+                          Text('No history', style: AppTypography.caption),
+                          SizedBox(height: AppSpacing.xs),
+                          Text(
+                            'Completed downloads appear here with timestamps',
+                            style: AppTypography.caption,
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                else
+                  ..._history.map(
+                    (song) => Padding(
+                      padding: const EdgeInsets.only(bottom: AppSpacing.xs),
+                      child: SongTile(
+                        song: song,
+                        subtitle: 'Downloaded',
+                        timestamp: song.downloadedAt == null
+                            ? null
+                            : formatDownloaded(song.downloadedAt!),
+                        onTap: () => SongInfoDialog.show(context, song),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 }
@@ -240,6 +253,22 @@ class _ActiveDownloadCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final percent = task.progress == null
+        ? '—'
+        : '${(task.progress! * 100).toStringAsFixed(0)}%';
+    final total = task.totalBytes;
+    final remaining = total == null
+        ? null
+        : (total - task.downloadedBytes).clamp(0, total);
+    final detail = [
+      if (task.speedBytesPerSecond != null)
+        '${_formatBytes(task.speedBytesPerSecond!.round())}/s',
+      total == null
+          ? '${_formatBytes(task.downloadedBytes)} · total unknown'
+          : '${_formatBytes(task.downloadedBytes)} / ${_formatBytes(total)}',
+      if (remaining != null) '${_formatBytes(remaining)} remaining',
+      if (task.eta != null) '${_formatEta(task.eta!)} remaining',
+    ].join(' · ');
     return Container(
       margin: const EdgeInsets.only(bottom: AppSpacing.sm),
       padding: const EdgeInsets.all(AppSpacing.md),
@@ -271,11 +300,11 @@ class _ActiveDownloadCard extends StatelessWidget {
                 ),
                 const SizedBox(height: AppSpacing.xs),
                 Text(
-                  task.progress == null
-                      ? 'Downloading…'
-                      : '${(task.progress! * 100).toStringAsFixed(0)}%',
+                  '${_statusLabel(task.status)} · $percent',
                   style: AppTypography.caption,
                 ),
+                const SizedBox(height: 3),
+                Text(detail, style: AppTypography.caption),
               ],
             ),
           ),
@@ -283,4 +312,35 @@ class _ActiveDownloadCard extends StatelessWidget {
       ),
     );
   }
+}
+
+String _statusLabel(DownloadStatus status) => switch (status) {
+  DownloadStatus.waiting => 'Waiting',
+  DownloadStatus.downloading => 'Downloading',
+  DownloadStatus.completed => 'Completed',
+  DownloadStatus.failed => 'Failed',
+  DownloadStatus.paused => 'Paused',
+  DownloadStatus.cancelled => 'Cancelled',
+};
+
+String _formatBytes(int bytes) {
+  if (bytes < 1024) return '$bytes B';
+  const units = ['KB', 'MB', 'GB'];
+  var value = bytes / 1024;
+  var unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return '${value.toStringAsFixed(value >= 10 ? 1 : 2)} ${units[unit]}';
+}
+
+String _formatEta(Duration duration) {
+  if (duration.inHours > 0) {
+    return '${duration.inHours}h ${duration.inMinutes.remainder(60)}m';
+  }
+  if (duration.inMinutes > 0) {
+    return '${duration.inMinutes} min';
+  }
+  return '${duration.inSeconds} sec';
 }

@@ -8,4 +8,4 @@
 ///                           "forceUpdate" }
 ///
 /// TODO: replace with the real deployed Vercel Update API URL before release.
-const String updateApiUrl = 'https://your-vercel-project.vercel.app/api/version';
+const String updateApiUrl = 'https://youtube-mp3-downloader-player.vercel.app/api/version';

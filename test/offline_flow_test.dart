@@ -47,12 +47,12 @@ UpdateService _networkService({
 }
 
 Song _song(String id, String title) => Song(
-      id: id,
-      title: title,
-      author: 'Artist',
-      duration: '3:00',
-      thumbnailUrl: '',
-    );
+  id: id,
+  title: title,
+  author: 'Artist',
+  duration: '3:00',
+  thumbnailUrl: '',
+);
 
 class _FakeYouTubeService extends YouTubeService {
   _FakeYouTubeService({List<Song>? page}) : page = page ?? <Song>[];
@@ -153,8 +153,9 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.byType(NavigationBar), findsOneWidget);
-      expect(find.byKey(const Key('search_launcher')), findsOneWidget);
+      expect(find.text('Library'), findsWidgets);
+      expect(find.text('Download'), findsOneWidget);
+      expect(find.text('All'), findsOneWidget);
       expect(find.byType(Dialog), findsNothing);
       expect(find.text('No Internet Connection'), findsNothing);
       expect(find.text('Update available'), findsNothing);
@@ -162,30 +163,33 @@ void main() {
   });
 
   group('offline search is blocked', () {
-    testWidgets('keyword search shows the network dialog, nothing hits YouTube',
-        (tester) async {
-      final service = _FakeYouTubeService(page: [_song('id-1', 'Song 1')]);
-      await pumpSearch(
-        tester,
-        service,
-        _networkService(connectivityGate: () => false),
-      );
+    testWidgets(
+      'keyword search shows the network dialog, nothing hits YouTube',
+      (tester) async {
+        final service = _FakeYouTubeService(page: [_song('id-1', 'Song 1')]);
+        await pumpSearch(
+          tester,
+          service,
+          _networkService(connectivityGate: () => false),
+        );
 
-      await submitQuery(tester, 'coldplay');
+        await submitQuery(tester, 'coldplay');
 
-      expect(find.text('No Internet Connection'), findsOneWidget);
-      expect(
-        find.textContaining('Internet connection is required to search'),
-        findsOneWidget,
-      );
-      expect(service.searchCalls, 0);
+        expect(find.text('No Internet Connection'), findsOneWidget);
+        expect(
+          find.textContaining('Internet connection is required to search'),
+          findsOneWidget,
+        );
+        expect(service.searchCalls, 0);
 
-      await dismissOk(tester);
-      expect(service.searchCalls, 0);
-    });
+        await dismissOk(tester);
+        expect(service.searchCalls, 0);
+      },
+    );
 
-    testWidgets('URL search is blocked before resolving the video',
-        (tester) async {
+    testWidgets('URL search is blocked before resolving the video', (
+      tester,
+    ) async {
       final service = _FakeYouTubeService();
       await pumpSearch(
         tester,
@@ -204,8 +208,9 @@ void main() {
   });
 
   group('online search gates and update check', () {
-    testWidgets('search runs and no update dialog when server build matches',
-        (tester) async {
+    testWidgets('search runs and no update dialog when server build matches', (
+      tester,
+    ) async {
       final service = _FakeYouTubeService(page: [_song('id-1', 'Song 1')]);
       await pumpSearch(tester, service, _networkService());
 
@@ -219,14 +224,11 @@ void main() {
       expect(find.text('Update available'), findsNothing);
     });
 
-    testWidgets('optional update prompts after search succeeds',
-        (tester) async {
+    testWidgets('optional update prompts after search succeeds', (
+      tester,
+    ) async {
       final service = _FakeYouTubeService(page: [_song('id-1', 'Song 1')]);
-      await pumpSearch(
-        tester,
-        service,
-        _networkService(serverCode: 9),
-      );
+      await pumpSearch(tester, service, _networkService(serverCode: 9));
 
       await submitQuery(tester, 'coldplay');
       await tester.pump(const Duration(milliseconds: 300));
@@ -256,14 +258,11 @@ void main() {
       expect(tester.widget<PopScope>(find.byType(PopScope)).canPop, isFalse);
     });
 
-    testWidgets('update API failure is invisible and search still works',
-        (tester) async {
+    testWidgets('update API failure is invisible and search still works', (
+      tester,
+    ) async {
       final service = _FakeYouTubeService(page: [_song('id-1', 'Song 1')]);
-      await pumpSearch(
-        tester,
-        service,
-        _networkService(apiHttpError: true),
-      );
+      await pumpSearch(tester, service, _networkService(apiHttpError: true));
 
       await submitQuery(tester, 'coldplay');
       await tester.pump(const Duration(milliseconds: 300));
@@ -277,8 +276,9 @@ void main() {
   });
 
   group('offline preview and download are blocked', () {
-    testWidgets('preview shows the network dialog and never starts streaming',
-        (tester) async {
+    testWidgets('preview shows the network dialog and never starts streaming', (
+      tester,
+    ) async {
       var online = true;
       final service = _FakeYouTubeService(page: [_song('id-1', 'Song 1')]);
       await pumpSearch(
@@ -304,39 +304,42 @@ void main() {
       expect(player.currentSong, isNull);
     });
 
-    testWidgets('download shows the network dialog and never starts the downloader',
-        (tester) async {
-      var online = true;
-      final service = _FakeYouTubeService(page: [_song('id-1', 'Song 1')]);
-      await pumpSearch(
-        tester,
-        service,
-        _networkService(connectivityGate: () => online),
-      );
-      await submitQuery(tester, 'coldplay');
-      expect(find.text('Song 1'), findsOneWidget);
+    testWidgets(
+      'download shows the network dialog and never starts the downloader',
+      (tester) async {
+        var online = true;
+        final service = _FakeYouTubeService(page: [_song('id-1', 'Song 1')]);
+        await pumpSearch(
+          tester,
+          service,
+          _networkService(connectivityGate: () => online),
+        );
+        await submitQuery(tester, 'coldplay');
+        expect(find.text('Song 1'), findsOneWidget);
 
-      online = false;
-      await tester.tap(find.byTooltip('Download').first);
-      await tester.pumpAndSettle();
+        online = false;
+        await tester.tap(find.byTooltip('Download').first);
+        await tester.pumpAndSettle();
 
-      expect(find.text('No Internet Connection'), findsOneWidget);
-      expect(
-        find.textContaining('Internet connection is required to download'),
-        findsOneWidget,
-      );
-      expect(service.downloadAudioCalls, 0);
-      expect(DownloadManager.instance.activeDownloads['id-1'], isNull);
+        expect(find.text('No Internet Connection'), findsOneWidget);
+        expect(
+          find.textContaining('Internet connection is required to download'),
+          findsOneWidget,
+        );
+        expect(service.downloadAudioCalls, 0);
+        expect(DownloadManager.instance.activeDownloads['id-1'], isNull);
 
-      await dismissOk(tester);
-      expect(service.downloadAudioCalls, 0);
-      expect(DownloadManager.instance.activeDownloads['id-1'], isNull);
-    });
+        await dismissOk(tester);
+        expect(service.downloadAudioCalls, 0);
+        expect(DownloadManager.instance.activeDownloads['id-1'], isNull);
+      },
+    );
   });
 
   group('connectivity recovery', () {
-    testWidgets('offline -> online -> offline works without restart',
-        (tester) async {
+    testWidgets('offline -> online -> offline works without restart', (
+      tester,
+    ) async {
       var online = false;
       final service = _FakeYouTubeService(page: [_song('id-1', 'Song 1')]);
       await pumpSearch(

@@ -57,15 +57,22 @@ Future<void> main() async {
   // search (failures are silently ignored, search never waits on it).
   final updateService = UpdateService();
 
-  runApp(MyApp(
-    controller: controller,
-    youtubeService: youtubeService,
-    updateService: updateService,
-  ));
+  runApp(
+    MyApp(
+      controller: controller,
+      youtubeService: youtubeService,
+      updateService: updateService,
+    ),
+  );
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({super.key, this.controller, this.youtubeService, this.updateService});
+  const MyApp({
+    super.key,
+    this.controller,
+    this.youtubeService,
+    this.updateService,
+  });
 
   /// Injectable for widget tests. When null, [HomeScreen] builds/owns its own
   /// controller backed by the real AudioService.
@@ -122,11 +129,12 @@ class _HomeScreenState extends State<HomeScreen> {
     super.initState();
     _youtubeService = widget.youtubeService ?? YouTubeService();
     _playerController =
-        widget.controller ?? MusicPlayerController(
-              streamUrlResolver: (songId) =>
-                  _youtubeService.getAudioStreamUrl(songId),
-              resumeStore: DatabaseResumeStore(),
-            );
+        widget.controller ??
+        MusicPlayerController(
+          streamUrlResolver: (songId) =>
+              _youtubeService.getAudioStreamUrl(songId),
+          resumeStore: DatabaseResumeStore(),
+        );
     _playerController.init();
     _playerController.addListener(_onPlayerChanged);
     _restoreSettings();
@@ -160,7 +168,8 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _persistSettings(
-      ({bool shuffle, RepeatStyle repeat}) settings) async {
+    ({bool shuffle, RepeatStyle repeat}) settings,
+  ) async {
     try {
       final db = DatabaseService.instance;
       await db.setSetting('shuffle', settings.shuffle.toString());
@@ -193,10 +202,7 @@ class _HomeScreenState extends State<HomeScreen> {
             NowPlayingScreen(controller: _playerController),
         transitionsBuilder: (context, animation, secondary, child) {
           return FadeTransition(
-            opacity: CurvedAnimation(
-              parent: animation,
-              curve: Curves.easeOut,
-            ),
+            opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
             child: SlideTransition(
               position: Tween<Offset>(
                 begin: const Offset(0, 0.08),
@@ -210,24 +216,33 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  void _openDownloadHistory() {
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const DownloadScreen()));
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       body: SafeArea(
-        bottom: false,
         child: Column(
           children: [
+            _HeaderNavigation(
+              selectedIndex: _currentIndex,
+              onSelected: (index) => setState(() => _currentIndex = index),
+              onHistory: _openDownloadHistory,
+            ),
             Expanded(
               child: IndexedStack(
                 index: _currentIndex,
                 children: [
+                  PlaylistScreen(playerController: _playerController),
                   SearchScreen(
                     youtubeService: _youtubeService,
                     playerController: _playerController,
                     updateService: widget.updateService,
                   ),
-                  const DownloadScreen(),
-                  PlaylistScreen(playerController: _playerController),
                 ],
               ),
             ),
@@ -235,36 +250,121 @@ class _HomeScreenState extends State<HomeScreen> {
               controller: _playerController,
               onOpenNowPlaying: _openNowPlaying,
             ),
-            const Padding(
-              padding: EdgeInsets.only(bottom: 4),
-            ),
           ],
         ),
       ),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (index) {
-          setState(() {
-            _currentIndex = index;
-          });
-        },
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.search_rounded),
-            selectedIcon: Icon(Icons.search_rounded),
-            label: 'Search',
+    );
+  }
+}
+
+class _HeaderNavigation extends StatelessWidget {
+  const _HeaderNavigation({
+    required this.selectedIndex,
+    required this.onSelected,
+    required this.onHistory,
+  });
+
+  final int selectedIndex;
+  final ValueChanged<int> onSelected;
+  final VoidCallback onHistory;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 10, 10, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(28),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(4),
+                child: Row(
+                  children: [
+                    _HeaderDestination(
+                      icon: Icons.library_music_rounded,
+                      label: 'Library',
+                      selected: selectedIndex == 0,
+                      onTap: () => onSelected(0),
+                    ),
+                    _HeaderDestination(
+                      icon: Icons.download_rounded,
+                      label: 'Download',
+                      selected: selectedIndex == 1,
+                      onTap: () => onSelected(1),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
-          NavigationDestination(
-            icon: Icon(Icons.download_rounded),
-            selectedIcon: Icon(Icons.download_rounded),
-            label: 'Downloads',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.library_music_rounded),
-            selectedIcon: Icon(Icons.library_music_rounded),
-            label: 'Playlist',
+          const SizedBox(width: 4),
+          Tooltip(
+            message: 'History',
+            child: IconButton(
+              onPressed: onHistory,
+              tooltip: 'Open History',
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+              icon: const Icon(Icons.history_rounded),
+            ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _HeaderDestination extends StatelessWidget {
+  const _HeaderDestination({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+        decoration: BoxDecoration(
+          color: selected
+              ? Theme.of(context).colorScheme.primary
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(24),
+        ),
+        child: Semantics(
+          button: true,
+          selected: selected,
+          label: label,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(24),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 11),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(icon, size: 19),
+                  const SizedBox(width: 7),
+                  Text(
+                    label,
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }

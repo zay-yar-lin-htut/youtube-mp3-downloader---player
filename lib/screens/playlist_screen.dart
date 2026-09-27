@@ -89,7 +89,8 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
   @override
   void initState() {
     super.initState();
-    _repository = widget.repository ??
+    _repository =
+        widget.repository ??
         (Platform.isAndroid
             ? PlaylistRepository(device: OnDeviceDeviceMusicService())
             : PlaylistRepository());
@@ -144,16 +145,22 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     }
     setState(() {
       _allCount = snapshot.songs.length;
-      _downloadedCount =
-          snapshot.songs.where((s) => s.source == SongSource.downloaded).length;
-      _onDeviceCount =
-          snapshot.songs.where((s) => s.source == SongSource.device).length;
+      _downloadedCount = snapshot.songs
+          .where((s) => s.source == SongSource.downloaded)
+          .length;
+      _onDeviceCount = snapshot.songs
+          .where((s) => s.source == SongSource.device)
+          .length;
       _customPlaylists = customs;
       _isLoading = false;
     });
   }
 
-  void _openDetail({PlaylistSystemView? systemView, String? playlistId, String? playlistName}) {
+  void _openDetail({
+    PlaylistSystemView? systemView,
+    String? playlistId,
+    String? playlistName,
+  }) {
     setState(() {
       _detail = _DetailRequest(
         playerController: widget.playerController,
@@ -192,7 +199,9 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
 
   void _showSnack(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   @override
@@ -227,66 +236,85 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
         child: ListView(
           physics: const AlwaysScrollableScrollPhysics(),
           padding: const EdgeInsets.fromLTRB(
-            AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.sm,
+            AppSpacing.lg,
+            AppSpacing.lg,
+            AppSpacing.lg,
+            AppSpacing.sm,
           ),
           children: [
-            Text('Playlists', style: AppTypography.screenHeading),
+            Text('Library', style: AppTypography.screenHeading),
             const SizedBox(height: AppSpacing.lg),
-
-            // ── System views ──────────────────────────────────────────
-            _ViewTile(
-              icon: Icons.library_music_outlined,
-              label: 'All',
-              count: _allCount,
-              onTap: () => _openDetail(systemView: PlaylistSystemView.all),
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            _ViewTile(
-              icon: Icons.download_outlined,
-              label: 'Downloaded',
-              count: _downloadedCount,
-              onTap: () => _openDetail(systemView: PlaylistSystemView.downloaded),
-            ),
-            const SizedBox(height: AppSpacing.xs),
-            _ViewTile(
-              icon: Icons.smartphone_rounded,
-              label: 'On device',
-              count: _onDeviceCount,
-              onTap: () => _openDetail(systemView: PlaylistSystemView.onDevice),
-            ),
-            const SizedBox(height: AppSpacing.lg),
-
-            // ── Custom playlists ──────────────────────────────────────
-            if (_customPlaylists.isNotEmpty) ...[
-              Text('My Playlists', style: AppTypography.caption),
-              const SizedBox(height: AppSpacing.sm),
-              ..._customPlaylists.map((pl) => Padding(
-                    padding: const EdgeInsets.only(bottom: AppSpacing.xs),
-                    child: _CustomPlaylistTile(
-                      playlist: pl,
-                      onTap: () => _openDetail(
-                        playlistId: pl.id,
-                        playlistName: pl.name,
-                      ),
-                      onRename: () => _renamePlaylist(pl),
-                      onDelete: () => _deletePlaylist(pl),
-                    ),
-                  )),
-              const SizedBox(height: AppSpacing.xs),
-            ],
-
-            // ── New playlist button ───────────────────────────────────
-            ListTile(
-              leading: const Icon(Icons.add_circle_outline, color: AppColors.primary),
-              title: const Text(
-                'New playlist',
-                style: TextStyle(color: AppColors.textPrimary),
+            GridView(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 2,
+                crossAxisSpacing: AppSpacing.md,
+                mainAxisSpacing: AppSpacing.md,
+                childAspectRatio: 1.35,
               ),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(AppRadius.md),
-              ),
-              onTap: _showNewPlaylistDialog,
+              children: [
+                _LibraryFolderCard(
+                  icon: Icons.library_music_rounded,
+                  title: 'All',
+                  count: _allCount,
+                  subtitle: 'All your music',
+                  onTap: () => _openDetail(systemView: PlaylistSystemView.all),
+                ),
+                _LibraryFolderCard(
+                  icon: Icons.download_rounded,
+                  title: 'Downloaded',
+                  count: _downloadedCount,
+                  subtitle: 'Saved for offline',
+                  onTap: () =>
+                      _openDetail(systemView: PlaylistSystemView.downloaded),
+                ),
+                _LibraryFolderCard(
+                  icon: Icons.smartphone_rounded,
+                  title: 'On device',
+                  count: _onDeviceCount,
+                  subtitle: 'Music on this phone',
+                  onTap: () =>
+                      _openDetail(systemView: PlaylistSystemView.onDevice),
+                ),
+              ],
             ),
+            const SizedBox(height: AppSpacing.xl),
+            Row(
+              children: [
+                Text('Your playlists', style: AppTypography.playlistUbuntu),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: _showNewPlaylistDialog,
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('New'),
+                ),
+              ],
+            ),
+            if (_customPlaylists.isEmpty)
+              const Text('Create a playlist to keep favourites together.')
+            else
+              GridView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _customPlaylists.length,
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  crossAxisSpacing: AppSpacing.md,
+                  mainAxisSpacing: AppSpacing.md,
+                  childAspectRatio: 1.55,
+                ),
+                itemBuilder: (context, index) {
+                  final pl = _customPlaylists[index];
+                  return _CustomPlaylistTile(
+                    playlist: pl,
+                    onTap: () =>
+                        _openDetail(playlistId: pl.id, playlistName: pl.name),
+                    onRename: () => _renamePlaylist(pl),
+                    onDelete: () => _deletePlaylist(pl),
+                  );
+                },
+              ),
           ],
         ),
       ),
@@ -324,7 +352,10 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Delete', style: TextStyle(color: AppColors.error)),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: AppColors.error),
+            ),
           ),
         ],
       ),
@@ -387,8 +418,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
 
   PlaylistSystemView get _systemView => _currentSystemView;
 
-  List<Song> get _rawSongs =>
-      _isSystemView ? _allSongs : _playlistSongs;
+  List<Song> get _rawSongs => _isSystemView ? _allSongs : _playlistSongs;
 
   @override
   void initState() {
@@ -482,7 +512,9 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
         ? switch (_systemView) {
             PlaylistSystemView.all => _rawSongs,
             PlaylistSystemView.downloaded =>
-              _rawSongs.where((s) => s.source == SongSource.downloaded).toList(),
+              _rawSongs
+                  .where((s) => s.source == SongSource.downloaded)
+                  .toList(),
             PlaylistSystemView.onDevice =>
               _rawSongs.where((s) => s.source == SongSource.device).toList(),
           }
@@ -494,13 +526,14 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
         list.sort((a, b) => (b.createdAt ?? 0).compareTo(a.createdAt ?? 0));
       case PlaylistSort.title:
         list.sort(
-            (a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
+          (a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()),
+        );
       case PlaylistSort.artist:
         list.sort(
-            (a, b) => a.author.toLowerCase().compareTo(b.author.toLowerCase()));
+          (a, b) => a.author.toLowerCase().compareTo(b.author.toLowerCase()),
+        );
       case PlaylistSort.duration:
-        list.sort(
-            (a, b) => _durationSeconds(a).compareTo(_durationSeconds(b)));
+        list.sort((a, b) => _durationSeconds(a).compareTo(_durationSeconds(b)));
     }
     return list;
   }
@@ -547,7 +580,9 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
 
   void _showSnack(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _renameSong(Song song) async {
@@ -609,16 +644,17 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child:
-                const Text('Delete', style: TextStyle(color: AppColors.error)),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: AppColors.error),
+            ),
           ),
         ],
       ),
     );
     if (confirm != true) return;
 
-    final wasPlaying =
-        widget.playerController.currentSong?.id == song.id;
+    final wasPlaying = widget.playerController.currentSong?.id == song.id;
     await widget.playerController.handleSongDeleted(song.id);
     try {
       if (song.localPath != null) {
@@ -726,10 +762,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(AppRadius.lg)),
       ),
-      builder: (_) => _AddToPlaylistSheet(
-        song: song,
-        playlists: _playlists,
-      ),
+      builder: (_) => _AddToPlaylistSheet(song: song, playlists: _playlists),
     );
   }
 
@@ -761,7 +794,9 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
               tooltip: 'Filter',
               color: AppColors.surfaceElevated,
               icon: const Icon(
-                  Icons.filter_list, color: AppColors.textSecondary),
+                Icons.filter_list,
+                color: AppColors.textSecondary,
+              ),
               onSelected: _switchSystemView,
               itemBuilder: (_) => const [
                 PopupMenuItem(
@@ -781,24 +816,35 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
             PopupMenuButton<PlaylistSort>(
               tooltip: 'Sort',
               color: AppColors.surfaceElevated,
-              icon: const Icon(Icons.sort_rounded, color: AppColors.textSecondary),
+              icon: const Icon(
+                Icons.sort_rounded,
+                color: AppColors.textSecondary,
+              ),
               onSelected: (v) => setState(() => _sort = v),
               itemBuilder: (_) => const [
                 PopupMenuItem(
-                    value: PlaylistSort.recentlyAdded,
-                    child: Text('Recently added')),
+                  value: PlaylistSort.recentlyAdded,
+                  child: Text('Recently added'),
+                ),
                 PopupMenuItem(value: PlaylistSort.title, child: Text('Title')),
-                PopupMenuItem(value: PlaylistSort.artist, child: Text('Artist')),
                 PopupMenuItem(
-                    value: PlaylistSort.duration, child: Text('Duration')),
+                  value: PlaylistSort.artist,
+                  child: Text('Artist'),
+                ),
+                PopupMenuItem(
+                  value: PlaylistSort.duration,
+                  child: Text('Duration'),
+                ),
               ],
             ),
-          ]
-          else
+          ] else
             PopupMenuButton<String>(
               tooltip: 'Sort',
               color: AppColors.surfaceElevated,
-              icon: const Icon(Icons.sort_rounded, color: AppColors.textSecondary),
+              icon: const Icon(
+                Icons.sort_rounded,
+                color: AppColors.textSecondary,
+              ),
               onSelected: (v) {
                 switch (v) {
                   case 'sort_added':
@@ -812,7 +858,10 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
                 }
               },
               itemBuilder: (_) => const [
-                PopupMenuItem(value: 'sort_added', child: Text('Recently added')),
+                PopupMenuItem(
+                  value: 'sort_added',
+                  child: Text('Recently added'),
+                ),
                 PopupMenuItem(value: 'sort_title', child: Text('Title')),
                 PopupMenuItem(value: 'sort_artist', child: Text('Artist')),
                 PopupMenuItem(value: 'sort_duration', child: Text('Duration')),
@@ -831,7 +880,10 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
             child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
               padding: const EdgeInsets.fromLTRB(
-                AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.sm,
+                AppSpacing.lg,
+                0,
+                AppSpacing.lg,
+                AppSpacing.sm,
               ),
               children: [
                 // Count header
@@ -857,24 +909,21 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
                   _DevicePermissionPane(
                     permission: _permission,
                     onAllowAccess: _requestDevicePermission,
-                    onOpenSettings: () =>
-                        widget.repository.openAppSettings(),
+                    onOpenSettings: () => widget.repository.openAppSettings(),
                   )
                 else if (visible.isEmpty)
                   _EmptyPane(filter: _systemView)
                 else
                   ...visible.map((song) {
                     final isActive = song.id == currentId;
-                    final isDownload =
-                        song.source == SongSource.downloaded;
-                    final isDevice =
-                        song.source == SongSource.device;
+                    final isDownload = song.source == SongSource.downloaded;
+                    final isDevice = song.source == SongSource.device;
                     final resume =
                         widget.playerController.resumePositions[song.id];
                     final resumeLabel =
                         !isActive && resume != null && resume > Duration.zero
-                            ? 'Continue · ${formatDuration(resume)}'
-                            : null;
+                        ? 'Continue · ${formatDuration(resume)}'
+                        : null;
                     final isCurrentAndPlaying =
                         isActive && widget.playerController.isPlaying;
 
@@ -887,16 +936,14 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
                         badge: isDownload
                             ? 'Downloaded'
                             : isDevice
-                                ? 'On device'
-                                : null,
+                            ? 'On device'
+                            : null,
                         onTap: () => _openNowPlaying(song),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
                             IconButton(
-                              tooltip: isCurrentAndPlaying
-                                  ? 'Pause'
-                                  : 'Play',
+                              tooltip: isCurrentAndPlaying ? 'Pause' : 'Play',
                               visualDensity: kSongActionDensity,
                               padding: kSongActionPadding,
                               constraints: kSongActionConstraints,
@@ -911,13 +958,11 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
                             _SongMenu(
                               song: song,
                               onPlay: () => _playSong(song),
-                              onAddToPlaylist: () =>
-                                  _showAddToPlaylist(song),
+                              onAddToPlaylist: () => _showAddToPlaylist(song),
                               onRename: isDownload
                                   ? () => _renameSong(song)
                                   : null,
-                              onInfo: () =>
-                                  SongInfoDialog.show(context, song),
+                              onInfo: () => SongInfoDialog.show(context, song),
                               onShowPath: () => _showFilePath(song),
                               onShareFile: () => _shareAudioFile(song),
                               onDeleteDownload: _isSystemView && isDownload
@@ -927,8 +972,7 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
                                   ? () => _confirmRemoveDevice(song)
                                   : null,
                               onRemoveFromPlaylist: !_isSystemView
-                                  ? () => _removeSongFromCustomPlaylist(
-                                      song)
+                                  ? () => _removeSongFromCustomPlaylist(song)
                                   : null,
                             ),
                           ],
@@ -974,17 +1018,19 @@ class _PlaylistDetailScreenState extends State<PlaylistDetailScreen>
 // Shared widgets
 // ---------------------------------------------------------------------------
 
-class _ViewTile extends StatelessWidget {
-  const _ViewTile({
+class _LibraryFolderCard extends StatelessWidget {
+  const _LibraryFolderCard({
     required this.icon,
-    required this.label,
+    required this.title,
     required this.count,
+    required this.subtitle,
     required this.onTap,
   });
 
   final IconData icon;
-  final String label;
+  final String title;
   final int count;
+  final String subtitle;
   final VoidCallback onTap;
 
   @override
@@ -992,27 +1038,29 @@ class _ViewTile extends StatelessWidget {
     return Material(
       color: AppColors.surfaceElevated,
       borderRadius: BorderRadius.circular(AppRadius.md),
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
-        borderRadius: BorderRadius.circular(AppRadius.md),
         onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.symmetric(
-            horizontal: AppSpacing.md,
-            vertical: AppSpacing.sm,
-          ),
-          child: Row(
+          padding: const EdgeInsets.all(AppSpacing.md),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 22, color: AppColors.textSecondary),
-              const SizedBox(width: AppSpacing.md),
-              Expanded(
-                child: Text(label, style: AppTypography.body),
+              Icon(icon, size: 32, color: AppColors.primary),
+              const SizedBox(height: AppSpacing.sm),
+              Text(
+                title,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTypography.songTitle,
               ),
-              Text('$count', style: AppTypography.caption),
-              const SizedBox(width: AppSpacing.xs),
-              const Icon(
-                Icons.chevron_right_rounded,
-                color: AppColors.textMuted,
-                size: 20,
+              const SizedBox(height: 3),
+              Text(
+                '$count ${count == 1 ? 'song' : 'songs'} · $subtitle',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: AppTypography.songSubtitle,
               ),
             ],
           ),
@@ -1070,8 +1118,11 @@ class _CustomPlaylistTile extends StatelessWidget {
               PopupMenuButton<String>(
                 tooltip: 'More',
                 color: AppColors.surfaceElevated,
-                icon: const Icon(Icons.more_vert,
-                    color: AppColors.textSecondary, size: 20),
+                icon: const Icon(
+                  Icons.more_vert,
+                  color: AppColors.textSecondary,
+                  size: 20,
+                ),
                 onSelected: (v) {
                   if (v == 'rename') onRename();
                   if (v == 'delete') onDelete();
@@ -1080,8 +1131,10 @@ class _CustomPlaylistTile extends StatelessWidget {
                   PopupMenuItem(value: 'rename', child: Text('Rename')),
                   PopupMenuItem(
                     value: 'delete',
-                    child: Text('Delete',
-                        style: TextStyle(color: AppColors.error)),
+                    child: Text(
+                      'Delete',
+                      style: TextStyle(color: AppColors.error),
+                    ),
                   ),
                 ],
               ),
@@ -1113,8 +1166,10 @@ class _CustomPlaylistTile extends StatelessWidget {
             ),
             ListTile(
               leading: const Icon(Icons.delete_rounded, color: AppColors.error),
-              title: const Text('Delete',
-                  style: TextStyle(color: AppColors.error)),
+              title: const Text(
+                'Delete',
+                style: TextStyle(color: AppColors.error),
+              ),
               onTap: () {
                 Navigator.pop(ctx);
                 onDelete();
@@ -1195,8 +1250,11 @@ class _SongMenu extends StatelessWidget {
           value: 'path',
           child: Row(
             children: [
-              Icon(Icons.folder_open_rounded,
-                  size: 18, color: AppColors.textSecondary),
+              Icon(
+                Icons.folder_open_rounded,
+                size: 18,
+                color: AppColors.textSecondary,
+              ),
               SizedBox(width: 8),
               Text('Show/Copy File Path'),
             ],
@@ -1207,24 +1265,30 @@ class _SongMenu extends StatelessWidget {
           const PopupMenuDivider(),
           const PopupMenuItem(
             value: 'delete_download',
-            child: Text('Delete Download',
-                style: TextStyle(color: AppColors.error)),
+            child: Text(
+              'Delete Download',
+              style: TextStyle(color: AppColors.error),
+            ),
           ),
         ],
         if (onRemoveDevice != null) ...[
           const PopupMenuDivider(),
           const PopupMenuItem(
             value: 'remove_device',
-            child: Text('Remove from Playlist',
-                style: TextStyle(color: AppColors.error)),
+            child: Text(
+              'Remove from Playlist',
+              style: TextStyle(color: AppColors.error),
+            ),
           ),
         ],
         if (onRemoveFromPlaylist != null) ...[
           const PopupMenuDivider(),
           const PopupMenuItem(
             value: 'remove_playlist',
-            child: Text('Remove from playlist',
-                style: TextStyle(color: AppColors.error)),
+            child: Text(
+              'Remove from playlist',
+              style: TextStyle(color: AppColors.error),
+            ),
           ),
         ],
       ],
@@ -1245,20 +1309,20 @@ class _EmptyPane extends StatelessWidget {
   Widget build(BuildContext context) {
     final (icon, title, subtitle) = switch (filter) {
       PlaylistSystemView.all => (
-          Icons.library_music_outlined,
-          'No music yet',
-          'Download songs from Search, or let FreeVibe see music on your device',
-        ),
+        Icons.library_music_outlined,
+        'No music yet',
+        'Download songs from Search, or let FreeVibe see music on your device',
+      ),
       PlaylistSystemView.downloaded => (
-          Icons.download_outlined,
-          'No downloaded songs',
-          'Download a song from Search and it will appear here',
-        ),
+        Icons.download_outlined,
+        'No downloaded songs',
+        'Download a song from Search and it will appear here',
+      ),
       PlaylistSystemView.onDevice => (
-          Icons.music_note_outlined,
-          'No device music found',
-          'FreeVibe could not find audio in your device collection',
-        ),
+        Icons.music_note_outlined,
+        'No device music found',
+        'FreeVibe could not find audio in your device collection',
+      ),
     };
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.xxl),
@@ -1296,18 +1360,17 @@ class _DevicePermissionPane extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final denied = permission == DevicePermissionState.denied;
-    final permanent =
-        permission == DevicePermissionState.permanentlyDenied;
+    final permanent = permission == DevicePermissionState.permanentlyDenied;
     final title = denied
         ? 'Device music access denied'
         : permanent
-            ? 'Device music access is permanently off'
-            : 'Device music access needed';
+        ? 'Device music access is permanently off'
+        : 'Device music access needed';
     final subtitle = denied
         ? 'Allow FreeVibe to read your media library to find songs stored on this device.'
         : permanent
-            ? 'Open settings and enable media permission for FreeVibe to find device music.'
-            : 'Allow FreeVibe to read your media library to see music stored on this device.';
+        ? 'Open settings and enable media permission for FreeVibe to find device music.'
+        : 'Allow FreeVibe to read your media library to see music stored on this device.';
 
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: AppSpacing.xl),
@@ -1315,14 +1378,16 @@ class _DevicePermissionPane extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(Icons.perm_media_rounded,
-                size: 56, color: AppColors.textMuted),
+            const Icon(
+              Icons.perm_media_rounded,
+              size: 56,
+              color: AppColors.textMuted,
+            ),
             const SizedBox(height: AppSpacing.md),
             Text(title, style: AppTypography.caption),
             const SizedBox(height: AppSpacing.xs),
             Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
+              padding: const EdgeInsets.symmetric(horizontal: AppSpacing.xl),
               child: Text(
                 subtitle,
                 textAlign: TextAlign.center,
@@ -1338,8 +1403,9 @@ class _DevicePermissionPane extends StatelessWidget {
             if (denied || permanent) ...[
               const SizedBox(height: AppSpacing.sm),
               TextButton(
-                  onPressed: onOpenSettings,
-                  child: const Text('Open Settings')),
+                onPressed: onOpenSettings,
+                child: const Text('Open Settings'),
+              ),
             ],
           ],
         ),
@@ -1353,10 +1419,7 @@ class _DevicePermissionPane extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _AddToPlaylistSheet extends StatefulWidget {
-  const _AddToPlaylistSheet({
-    required this.song,
-    required this.playlists,
-  });
+  const _AddToPlaylistSheet({required this.song, required this.playlists});
 
   final Song song;
   final CustomPlaylistService playlists;
@@ -1379,8 +1442,9 @@ class _AddToPlaylistSheetState extends State<_AddToPlaylistSheet> {
 
   Future<void> _load() async {
     final all = await widget.playlists.listAll();
-    final contained =
-        await widget.playlists.playlistsContainingSong(widget.song.id);
+    final contained = await widget.playlists.playlistsContainingSong(
+      widget.song.id,
+    );
     if (!mounted) return;
     setState(() {
       _allPlaylists = all;
@@ -1396,8 +1460,9 @@ class _AddToPlaylistSheetState extends State<_AddToPlaylistSheet> {
       await widget.playlists.addSong(pl.id, widget.song.id);
     }
     final all = await widget.playlists.listAll();
-    final contained =
-        await widget.playlists.playlistsContainingSong(widget.song.id);
+    final contained = await widget.playlists.playlistsContainingSong(
+      widget.song.id,
+    );
     if (!mounted) return;
     setState(() {
       _allPlaylists = all;
@@ -1408,8 +1473,9 @@ class _AddToPlaylistSheetState extends State<_AddToPlaylistSheet> {
   Future<void> _createAndAdd() async {
     final error = widget.playlists.validateName(_newName);
     if (error != null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(error)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error)));
       return;
     }
     if (FocusScope.of(context).hasPrimaryFocus) {
@@ -1419,8 +1485,9 @@ class _AddToPlaylistSheetState extends State<_AddToPlaylistSheet> {
     await widget.playlists.addSong(pl.id, widget.song.id);
     _newName = '';
     final all = await widget.playlists.listAll();
-    final contained =
-        await widget.playlists.playlistsContainingSong(widget.song.id);
+    final contained = await widget.playlists.playlistsContainingSong(
+      widget.song.id,
+    );
     if (!mounted) return;
     setState(() {
       _allPlaylists = all;
@@ -1465,8 +1532,7 @@ class _AddToPlaylistSheetState extends State<_AddToPlaylistSheet> {
               ),
               // Create new row
               Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: AppSpacing.md),
+                padding: const EdgeInsets.symmetric(horizontal: AppSpacing.md),
                 child: Row(
                   children: [
                     Expanded(
@@ -1474,12 +1540,12 @@ class _AddToPlaylistSheetState extends State<_AddToPlaylistSheet> {
                         style: const TextStyle(color: AppColors.textPrimary),
                         decoration: InputDecoration(
                           hintText: 'New playlist name',
-                          hintStyle:
-                              const TextStyle(color: AppColors.textMuted),
+                          hintStyle: const TextStyle(
+                            color: AppColors.textMuted,
+                          ),
                           isDense: true,
                           border: OutlineInputBorder(
-                            borderRadius:
-                                BorderRadius.circular(AppRadius.md),
+                            borderRadius: BorderRadius.circular(AppRadius.md),
                             borderSide: BorderSide.none,
                           ),
                           filled: true,
@@ -1495,8 +1561,10 @@ class _AddToPlaylistSheetState extends State<_AddToPlaylistSheet> {
                     ),
                     const SizedBox(width: AppSpacing.sm),
                     IconButton(
-                      icon: const Icon(Icons.add_circle,
-                          color: AppColors.primary),
+                      icon: const Icon(
+                        Icons.add_circle,
+                        color: AppColors.primary,
+                      ),
                       onPressed: _createAndAdd,
                     ),
                   ],
@@ -1515,8 +1583,7 @@ class _AddToPlaylistSheetState extends State<_AddToPlaylistSheet> {
                       onChanged: (_) => _toggle(pl),
                       title: Text(
                         pl.name,
-                        style:
-                            const TextStyle(color: AppColors.textPrimary),
+                        style: const TextStyle(color: AppColors.textPrimary),
                       ),
                       subtitle: Text(
                         '${pl.songCount} ${pl.songCount == 1 ? 'song' : 'songs'}',
@@ -1574,10 +1641,7 @@ class _NewPlaylistDialogState extends State<_NewPlaylistDialog> {
           onPressed: () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
-        TextButton(
-          onPressed: _submit,
-          child: const Text('Create'),
-        ),
+        TextButton(onPressed: _submit, child: const Text('Create')),
       ],
     );
   }
@@ -1626,10 +1690,7 @@ class _RenamePlaylistDialogState extends State<_RenamePlaylistDialog> {
           onPressed: () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
-        TextButton(
-          onPressed: _submit,
-          child: const Text('Rename'),
-        ),
+        TextButton(onPressed: _submit, child: const Text('Rename')),
       ],
     );
   }
@@ -1691,10 +1752,7 @@ class _RenameSongDialogState extends State<_RenameSongDialog> {
           onPressed: () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
-        TextButton(
-          onPressed: _submit,
-          child: const Text('Rename'),
-        ),
+        TextButton(onPressed: _submit, child: const Text('Rename')),
       ],
     );
   }

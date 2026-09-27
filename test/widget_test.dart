@@ -9,62 +9,47 @@ import 'package:yt_local_music/widgets/song_tile.dart';
 import 'fakes/fake_audio_engine.dart';
 
 Song _song(String id, {String? path}) => Song(
-      id: id,
-      title: 'Song $id',
-      author: 'Artist',
-      duration: '3:21',
-      thumbnailUrl: '',
-      localPath: path ?? '/tmp/$id.m4a',
-    );
+  id: id,
+  title: 'Song $id',
+  author: 'Artist',
+  duration: '3:21',
+  thumbnailUrl: '',
+  localPath: path ?? '/tmp/$id.m4a',
+);
 
 Widget _app(MusicPlayerController controller) {
   return MyApp(controller: controller);
 }
 
 void main() {
-  testWidgets('App renders search, downloads and playlist navigation',
-      (tester) async {
+  testWidgets('App renders library and downloads island navigation', (
+    tester,
+  ) async {
     final controller = MusicPlayerController(engine: FakeAudioEngine());
     await tester.pumpWidget(_app(controller));
     await tester.pumpAndSettle();
 
-    expect(find.byType(NavigationBar), findsOneWidget);
-    expect(find.text('Search'), findsWidgets);
+    expect(find.text('Library'), findsWidgets);
+    expect(find.text('Download'), findsWidgets);
 
     // Mini player is hidden while nothing is playing.
     expect(find.text('Song a'), findsNothing);
 
-    // Playlist root shows system views + custom playlists.
-    await tester.tap(find.text('Playlist'));
+    // Library root shows simple system filters and custom playlists.
     await tester.pumpAndSettle();
-    expect(find.text('Playlists'), findsOneWidget);
     expect(find.text('All'), findsOneWidget);
     expect(find.text('Downloaded'), findsOneWidget);
     expect(find.text('On device'), findsOneWidget);
 
-    // Tapping 'All' opens the detail screen with the empty pane.
-    await tester.tap(find.text('All'));
-    await tester.pumpAndSettle();
-    expect(find.text('No music yet'), findsOneWidget);
-
-    // Detail app bar keeps the standard filter control separate from Sort.
-    expect(find.byTooltip('Filter'), findsOneWidget);
-    expect(find.byTooltip('Sort'), findsOneWidget);
-
-    // The playlist detail stays inside the app shell: the bottom navigation
-    // bar remains visible (not hidden by a full-screen pushed route).
-    expect(find.byType(NavigationBar), findsOneWidget);
-
-    // Pop back to root, then back to Search.
-    await tester.tap(find.byIcon(Icons.arrow_back_ios_new_rounded));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('Search').last);
+    // Search remains available inside Downloads.
+    await tester.tap(find.text('Download').last);
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('search_launcher')), findsOneWidget);
   });
 
-  testWidgets('Playing a song shows the mini player and opens Now Playing',
-      (tester) async {
+  testWidgets('Playing a song shows the mini player and opens Now Playing', (
+    tester,
+  ) async {
     final controller = MusicPlayerController(engine: FakeAudioEngine());
     await tester.pumpWidget(_app(controller));
     await tester.pumpAndSettle();
@@ -91,8 +76,9 @@ void main() {
     expect(find.text('Song a'), findsNothing);
   });
 
-  testWidgets('Auto-advances to next track as engine completes',
-      (tester) async {
+  testWidgets('Auto-advances to next track as engine completes', (
+    tester,
+  ) async {
     final engine = FakeAudioEngine();
     final controller = MusicPlayerController(engine: engine);
     await tester.pumpWidget(_app(controller));
@@ -111,8 +97,7 @@ void main() {
     expect(find.text('Song b'), findsWidgets);
   });
 
-  testWidgets('Sleep timer starts and shows in Now Playing',
-      (tester) async {
+  testWidgets('Sleep timer starts and shows in Now Playing', (tester) async {
     final controller = MusicPlayerController(
       engine: FakeAudioEngine(),
       clock: () => DateTime(2025, 1, 1, 12, 0, 0),
@@ -160,16 +145,14 @@ void main() {
     controller.dispose();
   });
 
-  testWidgets('playSongList sets context name for playback',
-      (tester) async {
+  testWidgets('playSongList sets context name for playback', (tester) async {
     final engine = FakeAudioEngine();
     final controller = MusicPlayerController(engine: engine);
     expect(controller.playbackContextName, isNull);
 
-    await controller.playSongList(
-      [_song('a', path: '/tmp/a.m4a')],
-      contextName: 'Workout',
-    );
+    await controller.playSongList([
+      _song('a', path: '/tmp/a.m4a'),
+    ], contextName: 'Workout');
     await tester.pumpAndSettle();
     expect(controller.playbackContextName, 'Workout');
 
@@ -177,7 +160,9 @@ void main() {
     expect(controller.playbackContextName, isNull);
   });
 
-  testWidgets('Now Playing exposes the 10-second seek controls', (tester) async {
+  testWidgets('Now Playing exposes the 10-second seek controls', (
+    tester,
+  ) async {
     final controller = MusicPlayerController(engine: FakeAudioEngine());
     await tester.pumpWidget(_app(controller));
     await tester.pumpAndSettle();
@@ -197,8 +182,7 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('Mini player stays visible on the playlist detail route',
-      (tester) async {
+  testWidgets('Mini player stays visible while navigating', (tester) async {
     final controller = MusicPlayerController(engine: FakeAudioEngine());
     await tester.pumpWidget(_app(controller));
     await tester.pumpAndSettle();
@@ -206,15 +190,13 @@ void main() {
     await controller.playLocal(_song('a', path: '/tmp/a.m4a'));
     await tester.pumpAndSettle();
 
-    // Navigate down into a detail page (All view) — an in-tab page that keeps
-    // the app-level bottom navigation bar visible.
-    await tester.tap(find.text('Playlist'));
+    // Navigate between the two primary destinations.
+    await tester.tap(find.text('Download').last);
     await tester.pumpAndSettle();
-    await tester.tap(find.text('All'));
+    await tester.tap(find.text('Library').last);
     await tester.pumpAndSettle();
 
-    // The bottom navigation bar stays visible on the detail page.
-    expect(find.byType(NavigationBar), findsOneWidget);
+    expect(find.text('Library'), findsWidgets);
 
     // The global mini player still floats above the details.
     expect(find.text('Song a'), findsOneWidget);
@@ -229,14 +211,13 @@ void main() {
   });
 
   testWidgets('SongTile surfaces the Continue resume hint', (tester) async {
-    await tester.pumpWidget(MaterialApp(
-      home: Scaffold(
-        body: SongTile(
-          song: _song('a'),
-          resumeLabel: 'Continue · 1:37',
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SongTile(song: _song('a'), resumeLabel: 'Continue · 1:37'),
         ),
       ),
-    ));
+    );
     expect(find.text('Continue · 1:37'), findsOneWidget);
   });
 }

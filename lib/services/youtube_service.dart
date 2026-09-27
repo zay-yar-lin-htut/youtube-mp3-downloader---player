@@ -30,15 +30,17 @@ class DownloadUnavailableException implements Exception {
   String toString() => message;
 }
 
+/// Selects a directly downloadable stream; no transcoding is performed.
+enum AudioDownloadQuality { standard, smaller }
+
 /// Result of one manifest+media pass over the candidate clients.
-typedef DownloadAttempt = ({
-  String? path,
-  bool rateLimited,
-  Object? lastError,
-});
+typedef DownloadAttempt = ({String? path, bool rateLimited, Object? lastError});
 
 class YouTubeService {
+  YouTubeService({this.downloadQuality = AudioDownloadQuality.standard});
+
   final YoutubeExplode _yt = YoutubeExplode();
+  final AudioDownloadQuality downloadQuality;
 
   // Miscellaneous innertube player client (VISIONOS), payload copied from
   // yt-dlp. Proven in the lab to be the ONLY client that yields media URLs
@@ -46,21 +48,24 @@ class YouTubeService {
   // itag 140, `c=VISIONOS` and NO `n`/`pot` params (no JS deciphering needed).
   // The library's own ANDROID/SDKless URLs intermittently returned 403/416,
   // and ios/safari/tv manifest extraction fails for those videos.
-  static const _visionosClient = YoutubeApiClient({
-    'context': {
-      'client': {
-        'clientName': 'VISIONOS',
-        'clientVersion': '1.02',
-        'deviceMake': 'Apple',
-        'deviceModel': 'RealityDevice17,1',
-        'userAgent':
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 '
-            '(KHTML, like Gecko) Version/26.0 Safari/605.1.15',
-        'osName': 'visionOS',
-        'osVersion': '26.5.23O471',
+  static const _visionosClient = YoutubeApiClient(
+    {
+      'context': {
+        'client': {
+          'clientName': 'VISIONOS',
+          'clientVersion': '1.02',
+          'deviceMake': 'Apple',
+          'deviceModel': 'RealityDevice17,1',
+          'userAgent':
+              'Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 '
+              '(KHTML, like Gecko) Version/26.0 Safari/605.1.15',
+          'osName': 'visionOS',
+          'osVersion': '26.5.23O471',
+        },
       },
     },
-  }, 'https://www.youtube.com/youtubei/v1/player?key=AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc&prettyPrint=false');
+    'https://www.youtube.com/youtubei/v1/player?key=AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc&prettyPrint=false',
+  );
 
   // Multiple clients are tried because a single android client often yields
   // googlevideo URLs that fail at media-GET time. Deno-based JS solving is not
@@ -87,12 +92,14 @@ class YouTubeService {
       '(KHTML, like Gecko) Chrome/96.0.4664.18 Safari/537.36';
 
   Future<StreamManifest> _getManifestFor(
-          String videoId, YoutubeApiClient client) =>
-      _yt.videos.streamsClient
-          .getManifest(videoId, ytClients: [client]);
+    String videoId,
+    YoutubeApiClient client,
+  ) => _yt.videos.streamsClient.getManifest(videoId, ytClients: [client]);
 
-  Future<StreamManifest> _getManifestAll(String videoId) =>
-      _yt.videos.streamsClient.getManifest(videoId, ytClients: _manifestClients);
+  Future<StreamManifest> _getManifestAll(String videoId) => _yt
+      .videos
+      .streamsClient
+      .getManifest(videoId, ytClients: _manifestClients);
 
   String _clientName(YoutubeApiClient client) =>
       client.payload['context']['client']['clientName'].toString();
@@ -157,8 +164,10 @@ class YouTubeService {
     );
   }
 
-  AudioOnlyStreamInfo _bestAudioStream(AudioOnlyStreamInfo a,
-      AudioOnlyStreamInfo b) {
+  AudioOnlyStreamInfo _bestAudioStream(
+    AudioOnlyStreamInfo a,
+    AudioOnlyStreamInfo b,
+  ) {
     int score(AudioOnlyStreamInfo s) {
       var value = 0;
       if (s.fragments.isEmpty) value += 4;
@@ -173,12 +182,34 @@ class YouTubeService {
     return b;
   }
 
-  AudioOnlyStreamInfo selectBestAudioStream(
-      List<AudioOnlyStreamInfo> streams) {
+  AudioOnlyStreamInfo selectBestAudioStream(List<AudioOnlyStreamInfo> streams) {
     if (streams.isEmpty) {
       throw Exception('No audio streams available');
     }
     return streams.reduce(_bestAudioStream);
+  }
+
+  /// The smaller mode stays within directly playable, non-fragmented audio
+  /// where possible. Standard remains the existing highest-quality choice.
+  AudioOnlyStreamInfo selectDownloadAudioStream(
+    List<AudioOnlyStreamInfo> streams,
+  ) {
+    if (downloadQuality == AudioDownloadQuality.standard) {
+      return selectBestAudioStream(streams);
+    }
+    final compatible = streams
+        .where(
+          (stream) =>
+              stream.fragments.isEmpty && stream.container.name == 'mp4',
+        )
+        .toList();
+    final candidates = compatible.isNotEmpty
+        ? compatible
+        : streams.where((stream) => stream.fragments.isEmpty).toList();
+    final pool = candidates.isNotEmpty ? candidates : streams;
+    return pool.reduce(
+      (a, b) => a.bitrate.bitsPerSecond <= b.bitrate.bitsPerSecond ? a : b,
+    );
   }
 
   // Container name is directly usable as a file extension (per the library's
@@ -213,8 +244,10 @@ class YouTubeService {
     for (var pass = 1; pass <= _rateLimitMaxPasses; pass++) {
       if (pass > 1) {
         final delay = _rateLimitBackoff(pass);
-        debugPrint('[Download] RATE_LIMIT backoff pass=$pass '
-            'waiting=${delay.inMilliseconds}ms');
+        debugPrint(
+          '[Download] RATE_LIMIT backoff pass=$pass '
+          'waiting=${delay.inMilliseconds}ms',
+        );
         await Future.delayed(delay);
       }
 
@@ -229,7 +262,8 @@ class YouTubeService {
     }
 
     throw const DownloadRateLimitedException(
-        'Download temporarily limited by YouTube. Please try again shortly.');
+      'Download temporarily limited by YouTube. Please try again shortly.',
+    );
   }
 
   /// One pass over the manifest clients. Video ID, client, exception type and
@@ -248,43 +282,53 @@ class YouTubeService {
       try {
         manifest = await _getManifestFor(song.id, client);
       } on RequestLimitExceededException catch (e) {
-        debugPrint('[Download] RATE_LIMIT (manifest, client=$name) '
-            '${_describeException(e)}');
+        debugPrint(
+          '[Download] RATE_LIMIT (manifest, client=$name) '
+          '${_describeException(e)}',
+        );
         return (path: null, rateLimited: true, lastError: e);
       } catch (e, st) {
-        debugPrint('[Download] Manifest FAILED (client=$name) '
-            '${_describeException(e)}');
+        debugPrint(
+          '[Download] Manifest FAILED (client=$name) '
+          '${_describeException(e)}',
+        );
         debugPrint('$st');
         lastError = e;
         continue;
       }
 
       final audioStreams = manifest.audioOnly;
-      debugPrint('[Download] Manifest received (client=$name) '
-          'streams=${manifest.streams.length} audio=${audioStreams.length}');
+      debugPrint(
+        '[Download] Manifest received (client=$name) '
+        'streams=${manifest.streams.length} audio=${audioStreams.length}',
+      );
       if (audioStreams.isEmpty) {
         debugPrint('[Download] NO_AUDIO_STREAMS (client=$name)');
         lastError = StateError('No audio streams for client $name');
         continue;
       }
 
-      final audioInfo = selectBestAudioStream(audioStreams);
+      final audioInfo = selectDownloadAudioStream(audioStreams);
       final ext = _extForAudio(audioInfo);
       final filePath = '$appDirPath/${song.id}.$ext';
       final codecs = audioInfo.codec.parameters['codecs'] ?? '';
-      debugPrint('[Download] Stream selected tag=${audioInfo.tag} '
-          'container=${audioInfo.container.name} '
-          'codec=${audioInfo.codec.mimeType} codecs=$codecs '
-          'fragmented=${audioInfo.fragments.isNotEmpty} '
-          'totalBytes=${audioInfo.size.totalBytes} '
-          'url=${_urlPreview(audioInfo.url)} target=$filePath');
+      debugPrint(
+        '[Download] Stream selected tag=${audioInfo.tag} '
+        'container=${audioInfo.container.name} '
+        'codec=${audioInfo.codec.mimeType} codecs=$codecs '
+        'fragmented=${audioInfo.fragments.isNotEmpty} '
+        'totalBytes=${audioInfo.size.totalBytes} '
+        'url=${_urlPreview(audioInfo.url)} target=$filePath',
+      );
 
       try {
         final path = await _downloadFrom(audioInfo, song, filePath);
         return (path: path, rateLimited: false, lastError: null);
       } catch (e, st) {
-        debugPrint('[Download] Client candidate=$name FAILED: '
-            '${_describeException(e)}');
+        debugPrint(
+          '[Download] Client candidate=$name FAILED: '
+          '${_describeException(e)}',
+        );
         debugPrint('$st');
         lastError = e;
         continue;
@@ -299,12 +343,14 @@ class YouTubeService {
   Object _classifyDownloadFailure(Object? lastError) {
     if (lastError is VideoUnavailableException) {
       return const DownloadUnavailableException(
-          'This video is unavailable. Try a different result.');
+        'This video is unavailable. Try a different result.',
+      );
     }
     debugPrint('[Download] ALL_CLIENTS_FAILED');
     return StateError(
-        'All download candidates failed before producing bytes. '
-        'Last: ${_describeException(lastError ?? StateError('unknown'))}');
+      'All download candidates failed before producing bytes. '
+      'Last: ${_describeException(lastError ?? StateError('unknown'))}',
+    );
   }
 
   Duration _rateLimitBackoff(int pass) {
@@ -351,8 +397,10 @@ class YouTubeService {
     var position = start;
     var total = 0;
     while (position < endExclusive) {
-      final chunkEnd =
-          (position + _chunkBytes).clamp(1, endExclusive); // exclusive
+      final chunkEnd = (position + _chunkBytes).clamp(
+        1,
+        endExclusive,
+      ); // exclusive
       var received = -1;
       var lastErr = '';
       for (var attempt = 1; attempt <= _chunkRetries; attempt++) {
@@ -361,8 +409,10 @@ class YouTubeService {
           req.headers.set('user-agent', _httpUserAgent);
           req.headers.set('cookie', 'CONSENT=YES+cb');
           req.headers.set('Range', 'bytes=$position-${chunkEnd - 1}');
-          debugPrint('[Download] REQUEST_RANGE $position-${chunkEnd - 1} '
-              'attempt=$attempt');
+          debugPrint(
+            '[Download] REQUEST_RANGE $position-${chunkEnd - 1} '
+            'attempt=$attempt',
+          );
           final resp = await req.close().timeout(_responseTimeout);
           if (resp.statusCode != 200 && resp.statusCode != 206) {
             throw HttpException('Media GET failed: HTTP ${resp.statusCode}');
@@ -382,8 +432,10 @@ class YouTubeService {
           break;
         } catch (e) {
           lastErr = _describeException(e);
-          debugPrint('[Download] RANGE FAILED $position-${chunkEnd - 1} '
-              'attempt=$attempt err=$lastErr');
+          debugPrint(
+            '[Download] RANGE FAILED $position-${chunkEnd - 1} '
+            'attempt=$attempt err=$lastErr',
+          );
           if (await out.position() != position) {
             try {
               await out.setPosition(position);
@@ -392,11 +444,15 @@ class YouTubeService {
         }
       }
       if (lastErr.isNotEmpty) {
-        throw StateError('Chunk range $position-${chunkEnd - 1} failed '
-            'after $_chunkRetries attempts: $lastErr');
+        throw StateError(
+          'Chunk range $position-${chunkEnd - 1} failed '
+          'after $_chunkRetries attempts: $lastErr',
+        );
       }
-      debugPrint('[Download] RANGE COMPLETE $position-${chunkEnd - 1} '
-          'bytes=$received');
+      debugPrint(
+        '[Download] RANGE COMPLETE $position-${chunkEnd - 1} '
+        'bytes=$received',
+      );
       total += received;
       position = chunkEnd;
     }
@@ -404,11 +460,16 @@ class YouTubeService {
   }
 
   Future<String> _downloadFrom(
-      AudioOnlyStreamInfo audioInfo, Song song, String filePath) async {
+    AudioOnlyStreamInfo audioInfo,
+    Song song,
+    String filePath,
+  ) async {
     final file = File(filePath);
     if (await file.exists() && await file.length() > 0) {
-      debugPrint('[Download] ALREADY_EXISTS skip id=${song.id} '
-          'size=${await file.length()}');
+      debugPrint(
+        '[Download] ALREADY_EXISTS skip id=${song.id} '
+        'size=${await file.length()}',
+      );
       return filePath;
     }
 
@@ -422,13 +483,27 @@ class YouTubeService {
       debugPrint('[Download] RESUME from existing .part size=$downloadedBytes');
     }
 
+    // Reporting only: the ranged transport, resume behavior, chunk size and
+    // retry policy remain unchanged.
+    unawaited(
+      DownloadManager.instance.updateProgress(
+        song.id,
+        song.title,
+        totalBytes > 0 ? downloadedBytes / totalBytes : null,
+        downloadedBytes: downloadedBytes,
+        totalBytes: totalBytes > 0 ? totalBytes : null,
+      ),
+    );
+
     final Uri url = _withoutSecurityParams(audioInfo.url);
     final int endExclusive = totalBytes > 0 ? totalBytes : 0;
 
-    debugPrint('[Download] HTTP request starting '
-        'url=${_urlPreview(url)} '
-        'range=${totalBytes > 0 ? 'bytes=0-${totalBytes - 1}' : 'bytes=0-'} '
-        'chunk=${_chunkBytes}B resume=$downloadedBytes');
+    debugPrint(
+      '[Download] HTTP request starting '
+      'url=${_urlPreview(url)} '
+      'range=${totalBytes > 0 ? 'bytes=0-${totalBytes - 1}' : 'bytes=0-'} '
+      'chunk=${_chunkBytes}B resume=$downloadedBytes',
+    );
     debugPrint('[Download] Waiting for FIRST CHUNK');
     final HttpClient client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 15);
@@ -452,13 +527,25 @@ class YouTubeService {
           await for (final data in resp.timeout(_stallTimeout)) {
             await out.writeFrom(data);
             downloadedBytes += data.length;
-            debugPrint('[Download] CHUNK received length=${data.length} '
-                'total=$downloadedBytes of unknown');
+            unawaited(
+              DownloadManager.instance.updateProgress(
+                song.id,
+                song.title,
+                totalBytes > 0 ? downloadedBytes / totalBytes : null,
+                downloadedBytes: downloadedBytes,
+                totalBytes: totalBytes > 0 ? totalBytes : null,
+              ),
+            );
+            debugPrint(
+              '[Download] CHUNK received length=${data.length} '
+              'total=$downloadedBytes of unknown',
+            );
           }
         }
         if (totalBytes > 0 && downloadedBytes < totalBytes) {
           throw StateError(
-              'Incomplete download: $downloadedBytes of $totalBytes');
+            'Incomplete download: $downloadedBytes of $totalBytes',
+          );
         }
         if (downloadedBytes == 0) {
           throw HttpException('Media GET returned no bytes');
@@ -479,15 +566,24 @@ class YouTubeService {
             }
             downloadedBytes = filePosition;
             final progress = downloadedBytes / totalBytes;
-            debugPrint('[Download] PROGRESS=${progress.toStringAsFixed(4)} '
-                'bytes=$downloadedBytes of $totalBytes');
+            debugPrint(
+              '[Download] PROGRESS=${progress.toStringAsFixed(4)} '
+              'bytes=$downloadedBytes of $totalBytes',
+            );
             final now = DateTime.now();
             if (progress >= 1 ||
                 now.difference(lastProgressAt) >=
                     const Duration(milliseconds: 200)) {
               lastProgressAt = now;
-              unawaited(DownloadManager.instance
-                  .updateProgress(song.id, song.title, progress));
+              unawaited(
+                DownloadManager.instance.updateProgress(
+                  song.id,
+                  song.title,
+                  progress,
+                  downloadedBytes: downloadedBytes,
+                  totalBytes: totalBytes,
+                ),
+              );
             }
           },
         );
@@ -495,8 +591,10 @@ class YouTubeService {
           throw HttpException('Media download wrote no bytes');
         }
       }
-      debugPrint('[Download] Stream consumption finished '
-          'received=$downloadedBytes expected=$totalBytes');
+      debugPrint(
+        '[Download] Stream consumption finished '
+        'received=$downloadedBytes expected=$totalBytes',
+      );
 
       await out.flush();
       debugPrint('[Download] File flush completed');
@@ -504,8 +602,7 @@ class YouTubeService {
       if (totalBytes > 0) {
         final actual = await tempFile.length();
         if (actual != totalBytes) {
-          throw StateError(
-              'Size mismatch: file=$actual expected=$totalBytes');
+          throw StateError('Size mismatch: file=$actual expected=$totalBytes');
         }
       } else if (downloadedBytes == 0) {
         throw HttpException('Empty download');
@@ -516,19 +613,25 @@ class YouTubeService {
 
       final f = File(filePath);
       final size = await f.length();
-      debugPrint('[Download] FINAL exists=${await f.exists()} size=$size '
-          'expected=$totalBytes');
+      debugPrint(
+        '[Download] FINAL exists=${await f.exists()} size=$size '
+        'expected=$totalBytes',
+      );
       await DownloadManager.instance.markCompleted(song.id);
       debugPrint('[Download] COMPLETE path=$filePath bytes=$downloadedBytes');
       return filePath;
     } catch (e, st) {
-      debugPrint('[Download] ERROR type=${_describeException(e)} '
-          'bytes=$downloadedBytes '
-          'waiting=${downloadedBytes == 0 ? "FIRST_CHUNK" : "NEXT_CHUNK"}');
+      debugPrint(
+        '[Download] ERROR type=${_describeException(e)} '
+        'bytes=$downloadedBytes '
+        'waiting=${downloadedBytes == 0 ? "FIRST_CHUNK" : "NEXT_CHUNK"}',
+      );
       if (e is TimeoutException) {
-        debugPrint(downloadedBytes == 0
-            ? '[Download] FIRST BYTE TIMEOUT'
-            : '[Download] STALL TIMEOUT after $downloadedBytes bytes');
+        debugPrint(
+          downloadedBytes == 0
+              ? '[Download] FIRST BYTE TIMEOUT'
+              : '[Download] STALL TIMEOUT after $downloadedBytes bytes',
+        );
       }
       debugPrint('$st');
       final rs = out;

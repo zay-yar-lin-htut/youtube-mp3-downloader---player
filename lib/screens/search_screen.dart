@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import '../models/song.dart';
@@ -57,18 +58,57 @@ class _SearchScreenState extends State<SearchScreen> {
   String? _loadMoreError;
 
   bool _disposed = false;
+  final Map<String, Song> _downloadedById = {};
+  int _lastDownloadRevision = -1;
 
   @override
   void initState() {
     super.initState();
     _recents = RecentSearchStore.db();
+    _loadDownloadedSongs();
+    DownloadManager.instance.addListener(_onDownloadStateChanged);
   }
 
   @override
   void dispose() {
     _disposed = true;
+    DownloadManager.instance.removeListener(_onDownloadStateChanged);
     _controller.dispose();
     super.dispose();
+  }
+
+  void _onDownloadStateChanged() {
+    final revision = DownloadManager.historyRevision;
+    if (revision == _lastDownloadRevision) return;
+    _lastDownloadRevision = revision;
+    _loadDownloadedSongs();
+  }
+
+  Future<void> _loadDownloadedSongs() async {
+    try {
+      final library = await DatabaseService.instance.getPlaylist();
+      final history = await DatabaseService.instance.getDownloadHistory();
+      final all = [...library, ...history];
+      final downloaded = <String, Song>{};
+      for (final song in all) {
+        if (song.source != SongSource.downloaded || song.localPath == null) {
+          continue;
+        }
+        final exists = await File(song.localPath!).exists();
+        if (!exists) continue;
+        downloaded[song.id] = song;
+        if (song.videoId != null) downloaded[song.videoId!] = song;
+      }
+      if (mounted) {
+        setState(
+          () => _downloadedById
+            ..clear()
+            ..addAll(downloaded),
+        );
+      }
+    } catch (_) {
+      // Search remains usable when the local store is unavailable.
+    }
   }
 
   Future<void> _openSearchOverlay() async {
@@ -98,9 +138,7 @@ class _SearchScreenState extends State<SearchScreen> {
     if (query.isEmpty) {
       return;
     }
-    final online = await _ensureOnlineForAction(
-      networkRequiredSearchMessage,
-    );
+    final online = await _ensureOnlineForAction(networkRequiredSearchMessage);
     if (!online || _disposed || !mounted) {
       return;
     }
@@ -137,6 +175,7 @@ class _SearchScreenState extends State<SearchScreen> {
             _isInitialLoading = false;
             _isResolvingUrl = false;
           });
+          unawaited(_loadDownloadedSongs());
         }
       } else {
         final page = await widget.youtubeService.searchVideos(query);
@@ -147,6 +186,7 @@ class _SearchScreenState extends State<SearchScreen> {
             _hasMore = true;
             _isInitialLoading = false;
           });
+          unawaited(_loadDownloadedSongs());
         }
       }
     } catch (e) {
@@ -241,8 +281,7 @@ class _SearchScreenState extends State<SearchScreen> {
       return;
     }
     debugPrint('[Search] Download requested id=${song.id} title=${song.title}');
-    await DownloadManager.instance
-        .updateProgress(song.id, song.title, null);
+    await DownloadManager.instance.updateProgress(song.id, song.title, null);
     try {
       final localPath = await widget.youtubeService.downloadAudio(song);
       debugPrint('[Search] downloadAudio returned localPath=$localPath');
@@ -254,6 +293,14 @@ class _SearchScreenState extends State<SearchScreen> {
       );
       await DatabaseService.instance.insertSong(savedSong);
       await DatabaseService.instance.insertHistory(savedSong);
+      if (mounted) {
+        setState(() {
+          _downloadedById[savedSong.id] = savedSong;
+          if (savedSong.videoId != null) {
+            _downloadedById[savedSong.videoId!] = savedSong;
+          }
+        });
+      }
       DownloadManager.instance.removeFailure(song.id);
       DownloadManager.instance.notifyHistoryChanged();
       if (mounted) {
@@ -265,13 +312,13 @@ class _SearchScreenState extends State<SearchScreen> {
       DownloadManager.instance.recordFailure(song.id, song.title);
       if (mounted) {
         final message = switch (e) {
-          DownloadRateLimitedException() || DownloadUnavailableException() =>
-            '$e',
+          DownloadRateLimitedException() ||
+          DownloadUnavailableException() => '$e',
           _ => 'Download failed: $e',
         };
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(message)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(message)));
       }
     }
   }
@@ -387,7 +434,14 @@ class _SearchScreenState extends State<SearchScreen> {
                     controller: widget.playerController,
                     onPreview: () => _previewSong(song),
                   ),
-                  _DownloadButton(song: song, onDownload: _downloadSong),
+                  _DownloadButton(
+                    song: song,
+                    onDownload: _downloadSong,
+                    isDownloaded:
+                        _downloadedById.containsKey(song.id) ||
+                        (song.videoId != null &&
+                            _downloadedById.containsKey(song.videoId)),
+                  ),
                 ],
               ),
             ),
@@ -481,18 +535,23 @@ class _PreviewButton extends StatelessWidget {
       onPressed: isLoading
           ? null
           : isCurrent
-              ? controller.togglePause
-              : onPreview,
+          ? controller.togglePause
+          : onPreview,
     );
   }
 }
 
 /// Download button that surfaces REAL byte progress from the downloader.
 class _DownloadButton extends StatelessWidget {
-  const _DownloadButton({required this.song, required this.onDownload});
+  const _DownloadButton({
+    required this.song,
+    required this.onDownload,
+    required this.isDownloaded,
+  });
 
   final Song song;
   final ValueChanged<Song> onDownload;
+  final bool isDownloaded;
 
   @override
   Widget build(BuildContext context) {
@@ -500,6 +559,19 @@ class _DownloadButton extends StatelessWidget {
       listenable: DownloadManager.instance,
       builder: (context, _) {
         final task = DownloadManager.instance.activeDownloads[song.id];
+        if (isDownloaded && (task == null || task.isCompleted)) {
+          return const Tooltip(
+            message: 'Downloaded',
+            child: Padding(
+              padding: EdgeInsets.all(9),
+              child: Icon(
+                Icons.check_circle_rounded,
+                size: 22,
+                color: AppColors.success,
+              ),
+            ),
+          );
+        }
         if (task == null) {
           return IconButton(
             tooltip: 'Download',
